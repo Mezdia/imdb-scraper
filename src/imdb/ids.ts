@@ -36,6 +36,14 @@ export function referenceUrl(imdbId: string): string {
   return assertImdbOnlyUrl(`${IMDB_ORIGIN}/title/${imdbId.toLowerCase()}/reference/`);
 }
 
+export function photosUrl(imdbId: string): string {
+  return assertImdbOnlyUrl(`${IMDB_ORIGIN}/title/${imdbId.toLowerCase()}/mediaindex/`);
+}
+
+export function fullCreditsUrl(imdbId: string): string {
+  return assertImdbOnlyUrl(`${IMDB_ORIGIN}/title/${imdbId.toLowerCase()}/fullcredits/`);
+}
+
 /**
  * Normalize user input (bare id, imdb URL with or without protocol) into a
  * canonical IMDb title URL. Throws for non-IMDb hosts and non-title inputs.

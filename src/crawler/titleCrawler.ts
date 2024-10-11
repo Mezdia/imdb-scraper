@@ -1,30 +1,57 @@
 import * as cheerio from "cheerio";
-import { episodesUrl, parentalGuideUrl, referenceUrl, reviewsUrl, titleUrl } from "../imdb/ids.js";
+import {
+  episodesUrl,
+  fullCreditsUrl,
+  parentalGuideUrl,
+  photosUrl,
+  referenceUrl,
+  reviewsUrl,
+  titleUrl,
+} from "../imdb/ids.js";
 import type { CrawlOptions, EpisodeRef, TitleRecord } from "../imdb/types.js";
 import { BrowserEngine, fetchImdbHtml } from "./engine.js";
 import {
+  collectByKey,
   extractCastFallback,
+  extractCreditsDetailed,
+  extractDetailsFallback,
+  extractEmbeddedFacts,
   extractEpisodeIds,
+  extractGallery,
   extractJsonLdBlocks,
+  extractKeywords,
   extractNextData,
-  extractParentalGuideFallback,
-  extractReviewsFallback,
+  extractParentalGuideRich,
+  extractReviewsRich,
   formatMinutes,
   isWafChallengeHtml,
+  normalizeAkas,
   parseIso8601DurationToMinutes,
   textOf,
 } from "./extractors.js";
 import { SELECTORS } from "../imdb/selectors.js";
-import { readCachedDataset } from "../imdb/datasets.js";
+import {
+  akasForTitle,
+  basicsForTitle,
+  episodesForSeries,
+  ratingsForTitle,
+  readCachedDataset,
+} from "../imdb/datasets.js";
 import { searchTitles } from "../imdb/suggestion.js";
 import { logger } from "../logger.js";
 
 // ---------------------------------------------------------------------------
 // Title crawler: datasets -> suggestion -> HTTP -> browser, all IMDb-only.
+// Field groups: A identity, B dates/origin, C ratings, D story, E production,
+// F money, G people, H gallery, I guidance/reviews, J series.
 // ---------------------------------------------------------------------------
 
 function nowIso(): string {
   return new Date().toISOString();
+}
+
+function nn(v: string | undefined): string | undefined {
+  return v && v !== "\\N" && v.trim() ? v : undefined;
 }
 
 function detectKind(nextData: Record<string, unknown> | null, ldType?: string, titleType?: string): TitleRecord["kind"] {
@@ -36,7 +63,16 @@ function detectKind(nextData: Record<string, unknown> | null, ldType?: string, t
   return "unknown";
 }
 
-function ldToRecord(imdbId: string, url: string, html: string): Partial<TitleRecord> & { missing: string[] } {
+function detectKindFromBasics(titleType: string | undefined): TitleRecord["kind"] | undefined {
+  if (!titleType) return undefined;
+  const t = titleType.toLowerCase();
+  if (t.includes("tvseries") || t.includes("tvminiseries")) return "series";
+  if (t === "tvepisode") return "episode";
+  if (t === "movie" || t === "short" || t === "tvmovie" || t === "video") return "movie";
+  return undefined;
+}
+
+function ldToRecord(html: string): Partial<TitleRecord> & { missing: string[] } {
   const missing: string[] = [];
   const blocks = extractJsonLdBlocks(html);
   const ld = blocks[0];
@@ -51,11 +87,17 @@ function ldToRecord(imdbId: string, url: string, html: string): Partial<TitleRec
     out.plot = ld.description ?? undefined;
     out.date = ld.datePublished ?? undefined;
     out.year = ld.datePublished?.slice(0, 4) ?? undefined;
+    out.releaseDate = ld.datePublished ?? undefined;
     if (ld.aggregateRating) {
-      out.rating = String(ld.aggregateRating.ratingValue ?? "");
+      const rv = ld.aggregateRating.ratingValue;
+      out.rating = rv != null && String(rv) ? String(rv) : undefined;
       out.votes = typeof ld.aggregateRating.ratingCount === "number" ? ld.aggregateRating.ratingCount : undefined;
     }
     if (ld.genre) out.genres = ld.genre;
+    if (typeof ld.keywords === "string" && ld.keywords.trim()) {
+      out.keywords = ld.keywords.split(",").map((k) => k.trim().toLowerCase()).filter(Boolean).slice(0, 30);
+    }
+    if (typeof ld.contentRating === "string") out.contentRating = ld.contentRating;
     const mins = ld.duration ? parseIso8601DurationToMinutes(ld.duration) : null;
     out.runtimeMinutes = mins;
     out.runtime = formatMinutes(mins) ?? undefined;
@@ -67,10 +109,47 @@ function ldToRecord(imdbId: string, url: string, html: string): Partial<TitleRec
     }
     const dirs = ld.director ? (Array.isArray(ld.director) ? ld.director : [ld.director]) : [];
     if (dirs.length) out.directors = dirs.map((d) => d.name ?? "").filter(Boolean);
+    const creators = ld.creator ? (Array.isArray(ld.creator) ? ld.creator : [ld.creator]) : [];
+    if (creators.length) out.creators = creators.map((d) => d.name ?? "").filter(Boolean);
     if (ld.image && typeof ld.image === "string") out.poster = ld.image;
   }
 
-  // DOM fallbacks for anything JSON-LD missed.
+  // Embedded __NEXT_DATA__ deep-scan (B/C/D/E/F facts).
+  if (nextData) {
+    const facts = extractEmbeddedFacts(nextData);
+    if (facts.budget || facts.openingWeekend || facts.grossUSA || facts.grossWorldwide) {
+      out.boxOffice = {
+        budget: facts.budget,
+        openingWeekend: facts.openingWeekend,
+        grossUSA: facts.grossUSA,
+        grossWorldwide: facts.grossWorldwide,
+      };
+    }
+    if (facts.metascore != null) out.metascore = facts.metascore;
+    if (facts.top250Rank != null) out.top250Rank = Math.round(facts.top250Rank);
+    if (facts.releaseDate && !out.releaseDate) {
+      out.releaseDate = facts.releaseDate;
+      if (!out.date) out.date = facts.releaseDate;
+      if (!out.year) out.year = facts.releaseDate.slice(0, 4);
+    }
+    if (facts.countries) out.countries = facts.countries;
+    if (facts.languages) out.languages = facts.languages;
+    if (facts.filmingLocations) out.filmingLocations = facts.filmingLocations;
+    if (facts.productionCompanies) out.productionCompanies = facts.productionCompanies;
+    if (facts.tagline && !out.tagline) out.tagline = facts.tagline;
+    if (facts.awardsSummary) out.awardsSummary = facts.awardsSummary;
+    // Series season count often hides under keys like numberOfSeasons/totalSeasons.
+    const seasons = collectByKey(nextData, /^(numberOfSeasons|totalSeasons|seasonCount)$/i, 3);
+    for (const s of seasons) {
+      const n = Number(s);
+      if (Number.isFinite(n) && n > 0) {
+        out.totalSeasons = Math.round(n);
+        break;
+      }
+    }
+  }
+
+  // DOM fallbacks for anything embedded data missed.
   if (!out.title) {
     const t = textOf($, SELECTORS.title);
     if (t) out.title = t;
@@ -97,20 +176,49 @@ function ldToRecord(imdbId: string, url: string, html: string): Partial<TitleRec
     if (c.length) out.cast = c;
     else missing.push("cast");
   }
+  if (!out.directors?.length || !out.writers?.length) {
+    const creds = extractCreditsDetailed(html);
+    if (!out.directors?.length && creds.directors.length) out.directors = creds.directors;
+    if (creds.writers.length) out.writers = creds.writers;
+    if (!out.creators?.length && creds.stars.length && out.kind === "series") {
+      // Series "Created by" names land in the principal-credit stars bucket.
+    }
+    if (!out.directors?.length) missing.push("directors");
+    if (!creds.writers.length) missing.push("writers");
+  }
+  const det = extractDetailsFallback(html);
+  if (det.releaseDate && !out.releaseDate) {
+    out.releaseDate = det.releaseDate;
+    if (!out.date) out.date = det.releaseDate;
+  }
+  if (det.countries && !out.countries) out.countries = det.countries;
+  if (det.languages && !out.languages) out.languages = det.languages;
+  if (det.filmingLocations && !out.filmingLocations) out.filmingLocations = det.filmingLocations;
+  if (det.productionCompanies && !out.productionCompanies) out.productionCompanies = det.productionCompanies;
+  if (det.tagline && !out.tagline) out.tagline = det.tagline;
+  if (det.colorInfo) out.colorInfo = det.colorInfo;
+  if (det.soundMix) out.soundMix = det.soundMix;
+  if (!out.tagline) missing.push("tagline");
+  if (!out.countries) missing.push("countries");
+  if (!out.keywords?.length) {
+    const kw = extractKeywords(html);
+    if (kw.length) out.keywords = kw;
+    else missing.push("keywords");
+  }
+
   const kind = detectKind(nextData, (blocks[0] as Record<string, string> | undefined)?.["@type"] as string | undefined);
   out.kind = kind;
   return out;
 }
 
-async function loadTitleHtml(imdbId: string, engine: BrowserEngine | null, provenance: string[]): Promise<{ html: string; via: string } | null> {
-  const urls = [titleUrl(imdbId), referenceUrl(imdbId)];
+async function loadHtml(urls: string[], engine: BrowserEngine | null, provenance: string[], tag: string): Promise<string | null> {
   for (const u of urls) {
     const http = await fetchImdbHtml(u);
     if (http && !isWafChallengeHtml(http)) {
       provenance.push(`http:${u}`);
-      return { html: http, via: "http" };
+      return http;
     }
-    logger.warn(`HTTP path failed, trying browser engine for ${u}`);
+    logger.warn(`HTTP ${tag} failed for ${u} — escalate to browser engine`);
   }
   if (engine) {
     for (const u of urls) {
@@ -118,27 +226,12 @@ async function loadTitleHtml(imdbId: string, engine: BrowserEngine | null, prove
         const snap = await engine.goto(u);
         if (!snap.wafChallenge && snap.html.length > 1000) {
           provenance.push(`browser:${u}`);
-          return { html: snap.html, via: "browser" };
+          return snap.html;
         }
-        logger.warn(`Browser still challenged for ${u}`);
+        logger.warn(`Browser ${tag} still challenged for ${u}`);
       } catch (e) {
-        logger.warn(`Browser failed for ${u}: ${(e as Error).message}`);
+        logger.warn(`Browser ${tag} failed for ${u}: ${(e as Error).message}`);
       }
-    }
-  }
-  return null;
-}
-
-async function loadAuxHtml(imdbId: string, kind: "reviews" | "pg" | "episodes", engine: BrowserEngine | null): Promise<string | null> {
-  const u = kind === "reviews" ? reviewsUrl(imdbId) : kind === "pg" ? parentalGuideUrl(imdbId) : episodesUrl(imdbId);
-  const http = await fetchImdbHtml(u).catch(() => null);
-  if (http) return http;
-  if (engine) {
-    try {
-      const snap = await engine.goto(u);
-      if (!snap.wafChallenge) return snap.html;
-    } catch {
-      return null;
     }
   }
   return null;
@@ -162,52 +255,42 @@ export async function crawlTitle(
   const provenance: string[] = [];
   const missing: string[] = [];
 
-  // --- Layer 1: official datasets (WAF-free) enrich base facts ------------
-  let dsTitle: string | undefined;
-  let dsYear: string | undefined;
-  let dsRuntime: number | null = null;
-  let dsGenres: string[] | undefined;
-  let dsKind: TitleRecord["kind"] | undefined;
-  const basics = readCachedDataset("title.basics.tsv.gz");
-  if (basics) {
-    provenance.push("datasets:title.basics");
-    for (const line of basics.split("\n").slice(1)) {
-      if (line.startsWith(id + "\t")) {
-        const c = line.split("\t");
-        const ttype = c[1] ?? "";
-        dsTitle = c[2] || undefined;
-        dsYear = c[5] && c[5] !== "\\N" ? c[5] : undefined;
-        dsRuntime = c[7] && c[7] !== "\\N" ? Number(c[7]) : null;
-        dsGenres = c[8] && c[8] !== "\\N" ? c[8].split(",") : undefined;
-        dsKind = ttype.includes("tvSeries") || ttype.includes("tvMiniSeries") ? "series" : ttype === "tvEpisode" ? "episode" : ttype === "movie" ? "movie" : undefined;
-        break;
-      }
-    }
-  }
-  let dsRating: string | undefined;
-  let dsVotes: number | undefined;
-  const ratings = readCachedDataset("title.ratings.tsv.gz");
-  if (ratings) {
-    for (const line of ratings.split("\n").slice(1)) {
-      if (line.startsWith(id + "\t")) {
-        const c = line.split("\t");
-        dsRating = c[1] && c[1] !== "\\N" ? c[1] : undefined;
-        dsVotes = c[2] && c[2] !== "\\N" ? Number(c[2]) : undefined;
-        provenance.push("datasets:title.ratings");
-        break;
-      }
-    }
-  }
+  // --- Layer 1: official datasets (WAF-free) --------------------------------
+  const basicsText = readCachedDataset("title.basics.tsv.gz");
+  const bRow = basicsText ? basicsForTitle(basicsText, id) : null;
+  if (basicsText) provenance.push("datasets:title.basics");
+  const dsTitle = bRow ? nn(bRow.primaryTitle) : undefined;
+  const dsOriginal = bRow ? nn(bRow.originalTitle) : undefined;
+  const dsYear = bRow ? nn(bRow.startYear) : undefined;
+  const dsEndYear = bRow ? nn(bRow.endYear) : undefined;
+  const dsRuntime = bRow && nn(bRow.runtimeMinutes) ? Number(bRow.runtimeMinutes) : null;
+  const dsGenres = bRow && nn(bRow.genres) ? (nn(bRow.genres) as string).split(",") : undefined;
+  const dsKind = detectKindFromBasics(bRow?.titleType);
+  const dsAdult = bRow ? (bRow.isAdult === "1" ? true : bRow.isAdult === "0" ? false : null) : null;
+  const dsType = bRow ? nn(bRow.titleType) : undefined;
 
-  // --- Layer 2: page HTML (HTTP -> browser with WAF solving) ---------------
-  const loaded = await loadTitleHtml(id, engine, provenance);
+  const ratingsText = readCachedDataset("title.ratings.tsv.gz");
+  const rRow = ratingsText ? ratingsForTitle(ratingsText, id) : null;
+  if (ratingsText) provenance.push("datasets:title.ratings");
+  const dsRating = rRow ? nn(rRow.averageRating) : undefined;
+  const dsVotes = rRow && nn(rRow.numVotes) ? Number(rRow.numVotes) : undefined;
+
+  const akasText = readCachedDataset("title.akas.tsv.gz");
+  const dsAkas = akasText ? normalizeAkas(akasForTitle(akasText, id)) : null;
+  if (akasText) provenance.push("datasets:title.akas");
+
   const base: TitleRecord = {
     imdbId: id,
     url,
     title: dsTitle ?? id,
+    originalTitle: dsOriginal ?? null,
+    titleType: dsType ?? null,
     kind: dsKind ?? "unknown",
+    isAdult: dsAdult,
+    akas: dsAkas?.length ? dsAkas : null,
     year: dsYear ?? null,
     date: dsYear ?? null,
+    endYear: dsEndYear ?? null,
     rating: dsRating ?? null,
     votes: dsVotes ?? null,
     description: null,
@@ -219,6 +302,7 @@ export async function crawlTitle(
     writers: undefined,
     cast: undefined,
     poster: null,
+    gallery: opts.includeGallery ? [] : null,
     parentsGuide: opts.includeParentsGuide ? null : undefined,
     reviews: opts.includeReviews ? null : undefined,
     episodes: opts.includeEpisodes ? null : undefined,
@@ -228,7 +312,9 @@ export async function crawlTitle(
     provenance,
   };
 
-  if (!loaded) {
+  // --- Layer 2: page HTML (HTTP -> browser with WAF solving) ---------------
+  const html = await loadHtml([url, referenceUrl(id)], engine, provenance, "title");
+  if (!html) {
     // --- Layer 3: suggestion API as last IMDb-only resort ------------------
     try {
       const sug = await searchTitles(id, 3);
@@ -251,31 +337,82 @@ export async function crawlTitle(
     return base;
   }
 
-  const partial = ldToRecord(id, url, loaded.html);
+  const partial = ldToRecord(html);
   const rec: TitleRecord = {
     ...base,
     title: partial.title ?? base.title,
     kind: partial.kind && partial.kind !== "unknown" ? partial.kind : base.kind,
     year: partial.year ?? base.year,
-    date: partial.year ?? base.date,
+    date: partial.date ?? base.date,
+    releaseDate: partial.releaseDate ?? base.date,
     rating: partial.rating ?? base.rating,
     votes: partial.votes ?? base.votes,
     description: partial.description ?? base.description,
     plot: partial.plot ?? base.plot,
+    tagline: partial.tagline,
     runtime: partial.runtime ?? base.runtime,
     runtimeMinutes: partial.runtimeMinutes ?? base.runtimeMinutes,
     genres: partial.genres ?? base.genres,
+    keywords: partial.keywords,
+    contentRating: partial.contentRating,
+    colorInfo: partial.colorInfo,
+    soundMix: partial.soundMix,
+    awardsSummary: partial.awardsSummary,
+    boxOffice: partial.boxOffice,
+    metascore: partial.metascore,
+    top250Rank: partial.top250Rank,
+    countries: partial.countries,
+    languages: partial.languages,
+    filmingLocations: partial.filmingLocations,
+    productionCompanies: partial.productionCompanies,
     directors: partial.directors,
+    writers: partial.writers,
+    creators: partial.creators,
     cast: partial.cast,
     poster: partial.poster ?? base.poster,
+    totalSeasons: partial.totalSeasons,
   };
   for (const m of partial.missing) if (!missing.includes(m)) missing.push(m);
 
+  // Gallery from title page images (IMDb CDN only).
+  const gallery = extractGallery(html, opts.maxGalleryPhotos);
+  if (rec.poster && !gallery.includes(rec.poster) && gallery.length < opts.maxGalleryPhotos) {
+    gallery.unshift(rec.poster);
+  }
+  if (opts.includeGallery) {
+    const photosHtml = await loadHtml([photosUrl(id)], engine, provenance, "photos");
+    if (photosHtml) {
+      for (const g of extractGallery(photosHtml, opts.maxGalleryPhotos)) {
+        if (gallery.length >= opts.maxGalleryPhotos) break;
+        if (!gallery.includes(g)) gallery.push(g);
+      }
+      provenance.push("page:mediaindex");
+    } else {
+      missing.push("gallery-photos-page");
+    }
+    rec.gallery = gallery;
+    if (!gallery.length) missing.push("gallery");
+  } else {
+    rec.gallery = gallery.length ? gallery : null;
+  }
+
+  // Full credits page: authoritative writers/creators names when available.
+  const creditsHtml = await loadHtml([fullCreditsUrl(id)], engine, provenance, "fullcredits");
+  if (creditsHtml) {
+    const creds = extractCreditsDetailed(creditsHtml);
+    if (creds.directors.length && (!rec.directors || !rec.directors.length)) rec.directors = creds.directors;
+    if (creds.writers.length) rec.writers = creds.writers;
+    if (!rec.creators?.length && rec.kind === "series" && creds.stars.length) rec.creators = creds.stars.slice(0, 5);
+    provenance.push("page:fullcredits");
+  } else {
+    missing.push("fullcredits");
+  }
+
   // --- Reviews / Parental guide / Episodes ---------------------------------
   if (opts.includeReviews) {
-    const html = await loadAuxHtml(id, "reviews", engine);
-    if (html) {
-      const revs = extractReviewsFallback(html, opts.deepReviews ? 100 : 25);
+    const rHtml = await loadHtml([reviewsUrl(id)], engine, provenance, "reviews");
+    if (rHtml) {
+      const revs = extractReviewsRich(rHtml, opts.deepReviews ? 100 : 25);
       rec.reviews = revs;
       provenance.push("page:reviews");
       if (!revs.length) missing.push("reviews");
@@ -285,9 +422,9 @@ export async function crawlTitle(
     }
   }
   if (opts.includeParentsGuide) {
-    const html = await loadAuxHtml(id, "pg", engine);
-    if (html) {
-      const pg = extractParentalGuideFallback(html);
+    const pHtml = await loadHtml([parentalGuideUrl(id)], engine, provenance, "pg");
+    if (pHtml) {
+      const pg = extractParentalGuideRich(pHtml);
       rec.parentsGuide = pg;
       provenance.push("page:parentalguide");
       if (!pg.length) missing.push("parentsGuide");
@@ -301,28 +438,21 @@ export async function crawlTitle(
     const eps: EpisodeRef[] = [];
     if (epTsv) {
       provenance.push("datasets:title.episode");
-      for (const line of epTsv.split("\n").slice(1)) {
-        const c = line.split("\t");
-        if (c[1] === id) {
-          eps.push({
-            imdbId: c[0] as string,
-            season: c[2] !== "\\N" ? Number(c[2]) : null,
-            episode: c[3] !== "\\N" ? Number(c[3]) : null,
-          });
-          if (eps.length >= opts.maxEpisodes) break;
-        }
+      for (const e of episodesForSeries(epTsv, id).slice(0, opts.maxEpisodes)) {
+        eps.push({ imdbId: e.tconst, season: e.seasonNumber !== "\\N" ? Number(e.seasonNumber) : null, episode: e.episodeNumber !== "\\N" ? Number(e.episodeNumber) : null });
       }
     }
     if (!eps.length) {
-      const html = await loadAuxHtml(id, "episodes", engine);
-      if (html) {
-        for (const eid of extractEpisodeIds(html, opts.maxEpisodes)) eps.push({ imdbId: eid });
+      const eHtml = await loadHtml([episodesUrl(id)], engine, provenance, "episodes");
+      if (eHtml) {
+        for (const eid of extractEpisodeIds(eHtml, opts.maxEpisodes)) eps.push({ imdbId: eid });
         provenance.push("page:episodes");
       }
     }
-    // Enrich episode titles from suggestion API (WAF-free, IMDb-only).
     rec.episodes = eps.slice(0, opts.maxEpisodes);
     rec.episodeCount = rec.episodes.length || null;
+    const seasons = rec.episodes.map((e) => e.season).filter((s): s is number => typeof s === "number");
+    if (!rec.totalSeasons && seasons.length) rec.totalSeasons = Math.max(...seasons);
     if (!rec.episodes.length) missing.push("episodes");
   }
 

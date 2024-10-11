@@ -29,6 +29,8 @@ program
   .option("--no-reviews", "skip reviews")
   .option("--no-pg", "skip parental guide")
   .option("--no-episodes", "skip episode enumeration")
+  .option("--gallery", "also crawl the IMDb photo gallery (IMDb CDN only)")
+  .option("--max-photos <n>", "cap gallery photos per title", "20")
   .option("--max-episodes <n>", "cap episodes per series", "500")
   .option("--browser <mode>", "browser engine: auto|on|off", "auto")
   .option("--head", "run browser visible (headed)")
@@ -49,6 +51,8 @@ program
       includeParentsGuide: opts.fast ? false : opts.pg !== false,
       deepReviews: Boolean(opts.deepReviews),
       includeEpisodes: opts.episodes !== false,
+      includeGallery: Boolean(opts.gallery),
+      maxGalleryPhotos: Math.max(1, Number(opts.maxPhotos ?? 20)),
       maxEpisodes: Number(opts.maxEpisodes ?? 500),
       concurrency: Math.max(1, Number(opts.concurrency ?? 3)),
       politenessMs: Number(opts.politeness ?? 1200),

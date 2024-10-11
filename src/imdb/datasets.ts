@@ -90,22 +90,102 @@ export function indexRatingsTsv(text: string): Map<string, RatingRow> {
 }
 
 export function episodesForSeries(episodeTsv: string, seriesId: string): EpisodeRow[] {
-  const rows = parseTsv(episodeTsv) as unknown as EpisodeRow[];
-  return rows
-    .filter((r) => r.parentTconst === seriesId)
-    .sort(
-      (a, b) =>
-        Number(a.seasonNumber || 0) - Number(b.seasonNumber || 0) ||
-        Number(a.episodeNumber || 0) - Number(b.episodeNumber || 0),
-    );
+  // title.episode is sorted by episode tconst (not parent), so single-pass
+  // line scan without materializing every row as an object.
+  const out: EpisodeRow[] = [];
+  const lines = episodeTsv.split("\n");
+  for (let i = 1; i < lines.length; i++) {
+    const line = lines[i] as string;
+    if (!line) continue;
+    const c = line.split("\t");
+    if (c[1] === seriesId) {
+      out.push({ tconst: c[0] as string, parentTconst: c[1] as string, seasonNumber: c[2] as string, episodeNumber: c[3] as string });
+    }
+  }
+  return out.sort(
+    (a, b) =>
+      Number(a.seasonNumber || 0) - Number(b.seasonNumber || 0) ||
+      Number(a.episodeNumber || 0) - Number(b.episodeNumber || 0),
+  );
 }
 
 export function principalsForTitle(principalsTsv: string, titleId: string, limit = 15): PrincipalRow[] {
-  const rows = parseTsv(principalsTsv) as unknown as PrincipalRow[];
+  // title.principals is sorted by tconst — early-exit scan, no full parse.
+  const rows = rowsForId(principalsTsv, titleId) as unknown as PrincipalRow[];
   return rows
-    .filter((r) => r.tconst === titleId)
     .sort((a, b) => Number(a.ordering) - Number(b.ordering))
     .slice(0, limit);
+}
+
+/**
+ * Sorted-file early-exit scan. Official IMDb TSVs are sorted by tconst, so we
+ * stop at the first row greater than the target instead of reading everything.
+ */
+function rowsForId(text: string, id: string): Record<string, string>[] {
+  const out: Record<string, string>[] = [];
+  const lines = text.split("\n");
+  if (lines.length === 0) return out;
+  const header = (lines[0] ?? "").split("\t");
+  for (let i = 1; i < lines.length; i++) {
+    const line = lines[i] as string;
+    if (!line) continue;
+    if (line < id && !line.startsWith(id)) {
+      // Rows are sorted; a row strictly smaller (and not our prefix) can be skipped.
+      // Cannot break yet — keep scanning.
+      continue;
+    }
+    if (line.startsWith(id + "\t")) {
+      const cols = line.split("\t");
+      const row: Record<string, string> = {};
+      for (let c = 0; c < header.length; c++) row[header[c] as string] = cols[c] ?? "";
+      out.push(row);
+      continue;
+    }
+    if (out.length > 0) break; // passed our block
+    if (line > id && !line.startsWith(id)) break; // passed where our block would be
+  }
+  return out;
+}
+
+/** Single ratings row for a title. */
+export function ratingsForTitle(ratingsTsv: string, titleId: string): RatingRow | null {
+  const rows = rowsForId(ratingsTsv, titleId);
+  return (rows[0] as unknown as RatingRow) ?? null;
+}
+
+/** Single basics row for a title (originalTitle, titleType, years, ...). */
+export function basicsForTitle(basicsTsv: string, titleId: string): BasicsRow | null {
+  const rows = rowsForId(basicsTsv, titleId);
+  return (rows[0] as unknown as BasicsRow) ?? null;
+}
+
+/** Director/writer nconsts for a title from official title.crew. */
+export function crewForTitle(crewTsv: string, titleId: string): CrewRow | null {
+  const rows = rowsForId(crewTsv, titleId);
+  return (rows[0] as unknown as CrewRow) ?? null;
+}
+
+export function splitNconsts(field: string): string[] {
+  if (!field || field === "\\N") return [];
+  return field.split(",").map((s) => s.trim()).filter(Boolean);
+}
+
+/** Localized titles for a title from official title.akas. */
+export function akasForTitle(
+  akasTsv: string,
+  titleId: string,
+  limit = 25,
+): { title: string; region?: string; language?: string; types?: string; isOriginal?: boolean }[] {
+  return rowsForId(akasTsv, titleId)
+    .slice(0, limit)
+    .map((r) => ({
+      title: r["title"] as string,
+      region: r["region"] !== "\\N" ? (r["region"] as string) : undefined,
+      language: r["language"] !== "\\N" ? (r["language"] as string) : undefined,
+      types: r["types"] !== "\\N" ? (r["types"] as string) : undefined,
+      isOriginal: r["isOriginalTitle"] === "1",
+    }))
+    .filter((a) => a.title);
 }
 
 export function namesIndex(nameTsv: string): Map<string, string> {

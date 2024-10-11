@@ -54,6 +54,9 @@ node ./dist/cli.js -f links.txt -l "Nolan_Night"
 # Fast (skip reviews + parental guide) + single-file portable export
 node ./dist/cli.js tt0111161 --fast --portable
 
+# Photo gallery (IMDb CDN stills only, nothing external)
+node ./dist/cli.js tt0111161 --gallery --max-photos 20
+
 # Bulk enrichment from official IMDb datasets (one-time download)
 node ./dist/cli.js tt0111161 --datasets
 ```
@@ -72,6 +75,21 @@ Scraped/
     portable.html    # --portable single-file export
   Lists/<Name>/      # data.json array + merged maps + list viewer
 ```
+
+## Extracted fields (categorized)
+
+- **A. Identity:** title, originalTitle, titleType, kind, isAdult, akas (localized titles)
+- **B. Dates/origin:** year, releaseDate, endYear, countries, languages, filmingLocations, productionCompanies
+- **C. Ratings:** IMDb rating + votes, metascore, Top-250 rank
+- **D. Story:** plot/description, tagline, genres, keywords
+- **E. Production:** runtime, certification, color, sound mix, awards summary
+- **F. Money:** budget, opening weekend, USA + worldwide gross
+- **G. People:** directors, writers, creators, cast (name/role/nm id)
+- **H. Gallery:** poster + stills (`--gallery`, IMDb CDN only)
+- **I. Guidance/reviews:** parental guide (severity + votes + text), reviews (author, rating, date)
+- **J. Series:** episodes (id/season/episode), counts, total seasons
+
+Unobtainable fields are listed in `missing[]`, never invented.
 
 ## Develop
 
