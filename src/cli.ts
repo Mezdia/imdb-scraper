@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { Command } from "commander";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, mkdirSync } from "node:fs";
+import { join, dirname } from "node:path";
 import { normalizeTitleInput } from "./imdb/ids.js";
 import { searchTitles } from "./imdb/suggestion.js";
 import { ensureDataset, datasetUrl } from "./imdb/datasets.js";
@@ -26,6 +27,7 @@ program
   .option("-t, --type <kind>", "force media type (movie|series)")
   .option("--fast", "skip reviews + parental guide")
   .option("-r, --deep-reviews", "load more reviews")
+  .option("--deep-episodes", "crawl every episode as its own record (series)")
   .option("--no-reviews", "skip reviews")
   .option("--no-pg", "skip parental guide")
   .option("--no-episodes", "skip episode enumeration")
@@ -51,6 +53,7 @@ program
       includeParentsGuide: opts.fast ? false : opts.pg !== false,
       deepReviews: Boolean(opts.deepReviews),
       includeEpisodes: opts.episodes !== false,
+      deepEpisodes: Boolean(opts.deepEpisodes),
       includeGallery: Boolean(opts.gallery),
       maxGalleryPhotos: Math.max(1, Number(opts.maxPhotos ?? 20)),
       maxEpisodes: Number(opts.maxEpisodes ?? 500),
@@ -118,7 +121,15 @@ program
     }
 
     const needBrowser = crawl.engine !== "datasets";
-    const engine = needBrowser ? new BrowserEngine({ headless: crawl.headless, timeoutMs: 45_000 }) : null;
+    const storagePath = join(process.cwd(), ".cache", "imdb", "storage.json");
+    mkdirSync(dirname(storagePath), { recursive: true });
+    const engine = needBrowser
+      ? new BrowserEngine({
+          headless: crawl.headless,
+          timeoutMs: 45_000,
+          storagePath,
+        })
+      : null;
     if (engine) {
       try {
         await engine.launch();
@@ -168,6 +179,40 @@ program
         results.push(rec);
         const miss = rec.missing?.length ? ` | missing: ${rec.missing.join(", ")}` : "";
         logger.success(`[${id}] "${rec.title}" (${rec.year ?? "?"}) rating=${rec.rating ?? "?"} in ${((Date.now() - t0) / 1000).toFixed(1)}s${miss}`);
+
+        // Deep episodes: crawl each listed episode as its own record.
+        if (crawl.deepEpisodes && rec.kind === "series" && rec.episodes?.length) {
+          const epIds = rec.episodes.map((e) => e.imdbId);
+          logger.info(`[${id}] deep-crawling ${epIds.length} episode(s)…`);
+          const epOpts: CrawlOptions = {
+            ...crawl,
+            includeEpisodes: false,
+            deepEpisodes: false,
+          };
+          await runWithConcurrency(
+            epIds,
+            async (epId) => {
+              const existing = results.find((r) => r.imdbId === epId);
+              if (existing) return;
+              const epRec = await crawlTitle(epId, epOpts, engine);
+              epRec.seriesId = id;
+              const storedEp = storeRecord(outRoot, epRec, listName);
+              if (opts.html !== false && !listName) writeViewer(storedEp.indexHtml, epRec);
+              results.push(epRec);
+            },
+            { concurrency: crawl.concurrency, politenessMs: crawl.politenessMs, retries: 1 },
+          );
+          // Refresh list viewer after episode crawls.
+          if (listName && opts.html !== false) {
+            try {
+              const listDir = join(outRoot, "Lists", listName);
+              const cur = JSON.parse(readFileSync(join(listDir, "data.json"), "utf8")) as unknown;
+              if (Array.isArray(cur)) writeListViewer(join(listDir, "index.html"), listName, cur as TitleRecord[]);
+            } catch {
+              // best effort
+            }
+          }
+        }
       },
       { concurrency: crawl.concurrency, politenessMs: crawl.politenessMs, retries: crawl.retries },
     );

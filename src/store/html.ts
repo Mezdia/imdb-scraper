@@ -38,8 +38,7 @@ export function renderViewerHtml(rec: TitleRecord): string {
     .map((g) => `<a href="${esc(g)}" target="_blank" rel="noopener"><img src="${esc(g)}" loading="lazy" onerror="this.remove()"></a>`)
     .join("");
   const facts: [string, string][] = [];
-  if (rec.originalTitle && rec.originalTitle !== rec.title) facts.push(["Original title", rec.originalTitle]);
-  if (rec.releaseDate) facts.push(["Release date", rec.releaseDate]);
+  if (rec.originalTitle && rec.originalTitle !== rec.title) facts.push(["Original title", rec.originalTitle]);  if (rec.releaseDate) facts.push(["Release date", rec.releaseDate]);
   if (rec.endYear) facts.push(["End year", rec.endYear]);
   if (rec.contentRating) facts.push(["Certification", rec.contentRating]);
   if (rec.metascore != null) facts.push(["Metascore", String(rec.metascore)]);
@@ -98,6 +97,7 @@ h2{font-family:Georgia,serif;margin:2rem 0 .6rem;border-left:4px solid var(--gol
 .rmeta{color:var(--muted);font-size:.78rem;margin-top:.4rem}
 .pgdesc{font-size:.82rem;color:#d1d5db;margin:.2rem 0 .6rem;flex-basis:100%}
 ul.eps{columns:2;list-style:none}ul.eps li{padding:.25rem 0;color:var(--muted);font-size:.9rem}
+ul.trailers{list-style:none;margin-top:.6rem}ul.trailers li{padding:.3rem 0}
 .missing{background:#3b2f0b;border:1px solid var(--gold);padding:.7rem;border-radius:6px;margin-top:1rem;font-size:.9rem}
 .prov{color:#6b7280;font-size:.75rem;margin-top:1.5rem;word-break:break-all}
 a{color:var(--gold)}
@@ -117,6 +117,7 @@ ${people}
 ${rec.tagline ? `<div class="tagline">“${esc(rec.tagline)}”</div>` : ""}
 <div class="desc">${esc(rec.description ?? rec.plot ?? "No description available.")}</div>
 ${factsHtml ? `<h2>Facts</h2><div class="facts">${factsHtml}</div>` : ""}
+${(rec.trailers ?? []).length ? `<h2>Trailers</h2><ul class="trailers">${(rec.trailers ?? []).map((t) => `<li><a href="${esc(t.url ?? "")}">${esc(t.name ?? t.id)}</a></li>`).join("")}</ul>` : ""}
 ${gallery ? `<h2>Gallery (${(rec.gallery ?? []).length})</h2><div class="gallery">${gallery}</div>` : ""}
 ${pg ? `<h2>Parents Guide</h2><div class="badges">${pg}</div>` : ""}
 ${cast ? `<h2>Cast</h2><div class="cast-grid">${cast}</div>` : ""}

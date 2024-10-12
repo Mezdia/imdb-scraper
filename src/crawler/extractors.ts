@@ -23,7 +23,7 @@ export interface LdJsonTitle {
   duration?: string;
   image?: string;
   contentRating?: string;
-  trailer?: { embedUrl?: string; name?: string } | { embedUrl?: string; name?: string }[];
+  trailer?: { embedUrl?: string; name?: string; thumbnail?: { contentUrl?: string } | string } | { embedUrl?: string; name?: string; thumbnail?: { contentUrl?: string } | string }[];
 }
 
 export function extractJsonLdBlocks(html: string): LdJsonTitle[] {
@@ -280,10 +280,12 @@ function collectStringsFor(root: unknown, res: RegExp[], cap = 8): string[] | un
 }
 
 function detailList($: cheerio.CheerioAPI, testid: string): string[] {
-  const items = $(`li[data-testid="${testid}"] a, li[data-testid="${testid}"] span`)
+  // Value links/items only — never the section label.
+  const items = $(`li[data-testid="${testid}"] a, li[data-testid="${testid}"] .ipc-metadata-list-item__list-content-item`)
     .toArray()
+    .filter((el) => !$(el).hasClass("ipc-metadata-list-item__label"))
     .map((el) => $(el).text().trim())
-    .filter((t) => t && t.length < 80);
+    .filter((t) => t && t.length < 120);
   return [...new Set(items)].slice(0, 8);
 }
 
@@ -300,7 +302,9 @@ export function extractDetailsFallback(html: string): {
 } {
   const $ = cheerio.load(html);
   const one = (id: string): string | undefined => {
-    const t = $(`li[data-testid="${id}"]`).first().text().trim().replace(/\s+/g, " ");
+    const li = $(`li[data-testid="${id}"]`).first();
+    li.find(".ipc-metadata-list-item__label").remove();
+    const t = li.text().trim().replace(/\s+/g, " ");
     return t || undefined;
   };
   const nz = (arr: string[]): string[] | undefined => (arr.length ? arr : undefined);
@@ -354,9 +358,18 @@ export function extractCreditsDetailed(html: string): {
 }
 
 /**
- * Gallery: collect IMDb-CDN stills/posters. ONLY m.media-amazon.com URLs are
- * accepted (IMDb-only rule) — everything else is dropped.
+ * Gallery: collect IMDb-CDN stills/posters. ONLY m.media-amazon.com/images
+ * URLs are accepted (IMDb-only rule) — everything else is dropped.
+ * Deduplicates by canonical image id (variant suffixes stripped) and drops
+ * site chrome (/images/G/, favicons, spinners).
  */
+export function canonicalImageId(url: string): string | null {
+  const m = url.match(/m\.media-amazon\.com\/images\/M\/([^/.?]+)/i);
+  if (m) return (m[1] as string).split(".")[0] as string;
+  const g = url.match(/m\.media-amazon\.com\/images\/[^?]*?\/([^/?]+)\.(jpg|jpeg|png|webp)/i);
+  return g ? (g[1] as string) : null;
+}
+
 export function extractGallery(html: string, limit = 20): string[] {
   const out: string[] = [];
   const seen = new Set<string>();
@@ -366,18 +379,13 @@ export function extractGallery(html: string, limit = 20): string[] {
     if (u.startsWith("//")) u = `https:${u}`;
     if (!/^https?:\/\//i.test(u)) return;
     if (!isImdbOnlyUrl(u)) return;
-    if (!/media-amazon\.com\/images/i.test(u)) return;
+    if (!/m\.media-amazon\.com\/images\/M\//i.test(u)) return;
     if (!/\.(jpg|jpeg|png|webp)/i.test(u)) return;
-    // Normalize to a mid-size variant, drop tiny thumbs.
-    if (/\_V1\_\.(UX|UY|CR|SX|SY)\d+.*\.(jpg|png|webp)/i.test(u) && /_(SX|UX|SY|UY)(\d+)/i.test(u)) {
-      const m = u.match(/_(SX|UX|SY|UY)(\d+)/i);
-      if (m && Number(m[2]) < 200) return;
-    }
-    const base = u.split("?")[0] as string;
-    if (!seen.has(base)) {
-      seen.add(base);
-      out.push(base);
-    }
+    if (/favicon|spinner|transparent|blank/i.test(u)) return;
+    const id = canonicalImageId(u);
+    if (!id || seen.has(id)) return;
+    seen.add(id);
+    out.push(u.split("?")[0] as string);
   };
 
   const $ = cheerio.load(html);
@@ -458,8 +466,7 @@ export function extractParentalGuideRich(html: string): ParentalGuideItem[] {
   return out.length ? out : extractParentalGuideFallback(html).map((p) => ({ ...p, votes: null }));
 }
 
-export function extractKeywords(html: string, limit = 30): string[] {
-  const $ = cheerio.load(html);
+export function extractKeywords(html: string, limit = 30): string[] {  const $ = cheerio.load(html);
   const kws = $('[data-testid="storyline-plot-keywords"] a, a[href*="/keyword"]')
     .toArray()
     .map((el) => $(el).text().trim().toLowerCase())
@@ -469,4 +476,20 @@ export function extractKeywords(html: string, limit = 30): string[] {
 
 export function normalizeAkas(rows: { title: string; region?: string; language?: string; types?: string; isOriginal?: boolean }[]): AkaEntry[] {
   return rows.filter((r) => r.title).slice(0, 25);
+}
+
+/** Merge review lists, deduping by normalized author+title. */
+export function mergeReviews(primary: Review[], extra: Review[], limit = 100): Review[] {
+  const seen = new Set<string>();
+  const out: Review[] = [];
+  const key = (r: Review) => `${(r.author ?? "").toLowerCase()}|${(r.title ?? "").toLowerCase().slice(0, 80)}`;
+  for (const r of [...primary, ...extra]) {
+    if (out.length >= limit) break;
+    const k = key(r);
+    if (!r.title && !r.content) continue;
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push(r);
+  }
+  return out;
 }

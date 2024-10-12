@@ -85,9 +85,9 @@ Scraped/
 - **E. Production:** runtime, certification, color, sound mix, awards summary
 - **F. Money:** budget, opening weekend, USA + worldwide gross
 - **G. People:** directors, writers, creators, cast (name/role/nm id)
-- **H. Gallery:** poster + stills (`--gallery`, IMDb CDN only)
-- **I. Guidance/reviews:** parental guide (severity + votes + text), reviews (author, rating, date)
-- **J. Series:** episodes (id/season/episode), counts, total seasons
+- **H. Gallery:** poster + stills (`--gallery`, IMDb CDN only), trailers (IMDb video links), photo/video counts
+- **I. Guidance/reviews:** parental guide (severity + votes + breakdown + item texts), reviews (author, rating, date, helpful votes) + total count
+- **J. Series:** episodes (id/title/air-date/rating/votes/poster/plot), counts, total seasons; `--deep-episodes` crawls each episode as its own record
 
 Unobtainable fields are listed in `missing[]`, never invented.
 

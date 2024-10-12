@@ -29,7 +29,10 @@ export interface ParentalGuideItem {
   type: string;
   rating: string;
   votes?: number | null;
+  totalVotes?: number | null;
+  breakdown?: { rating: string; votes: number }[];
   description?: string;
+  details?: { text: string; spoiler: boolean }[];
 }
 
 export interface EpisodeRef {
@@ -39,6 +42,16 @@ export interface EpisodeRef {
   title?: string;
   airDate?: string;
   rating?: string | null;
+  votes?: number | null;
+  poster?: string;
+  plot?: string;
+}
+
+export interface TrailerRef {
+  id: string;
+  name?: string;
+  url?: string;
+  runtimeSeconds?: number;
 }
 
 /** Localized / alternative title from official title.akas. */
@@ -112,11 +125,16 @@ export interface TitleRecord {
 
   // --- H. Media gallery (IMDb CDN only) ------------------------------------------
   poster?: string | null;
+  posterCaption?: string | null;
   gallery?: string[] | null;
+  photoCount?: number | null;
+  videoCount?: number | null;
+  trailers?: TrailerRef[] | null;
 
   // --- I. Guidance & reviews -------------------------------------------------------
   parentsGuide?: ParentalGuideItem[] | null;
   reviews?: Review[] | null;
+  reviewCount?: number | null;
 
   // --- J. Series ---------------------------------------------------------------------
   episodes?: EpisodeRef[] | null;
@@ -146,6 +164,7 @@ export interface CrawlOptions {
   includeParentsGuide: boolean;
   deepReviews: boolean;
   includeEpisodes: boolean;
+  deepEpisodes: boolean;
   includeGallery: boolean;
   maxGalleryPhotos: number;
   maxEpisodes: number;
@@ -162,6 +181,7 @@ export const DEFAULT_CRAWL_OPTIONS: CrawlOptions = {
   includeParentsGuide: true,
   deepReviews: false,
   includeEpisodes: true,
+  deepEpisodes: false,
   includeGallery: false,
   maxGalleryPhotos: 20,
   maxEpisodes: 500,

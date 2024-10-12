@@ -28,8 +28,14 @@ export function parentalGuideUrl(imdbId: string): string {
   return assertImdbOnlyUrl(`${IMDB_ORIGIN}/title/${imdbId.toLowerCase()}/parentalguide/`);
 }
 
-export function episodesUrl(imdbId: string): string {
-  return assertImdbOnlyUrl(`${IMDB_ORIGIN}/title/${imdbId.toLowerCase()}/episodes/`);
+export function episodesUrl(imdbId: string, season?: number): string {
+  const base = `${IMDB_ORIGIN}/title/${imdbId.toLowerCase()}/episodes/`;
+  const url = season != null && season > 0 ? `${base}?season=${season}` : base;
+  return assertImdbOnlyUrl(url);
+}
+
+export function taglinesUrl(imdbId: string): string {
+  return assertImdbOnlyUrl(`${IMDB_ORIGIN}/title/${imdbId.toLowerCase()}/taglines/`);
 }
 
 export function referenceUrl(imdbId: string): string {
