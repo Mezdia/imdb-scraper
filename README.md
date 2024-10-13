@@ -98,6 +98,26 @@ npm run build   # tsc
 npm test        # vitest (offline, no network)
 ```
 
+## IMDb client library (`src/imdb/`)
+
+The dedicated, reusable data-access layer — import it in your own code:
+
+```ts
+import { ImdbClient } from "./dist/imdb/index.js";
+
+const imdb = new ImdbClient();
+await imdb.search("shawshank");          // official suggestion API
+imdb.title("tt0111161");                 // validated canonical URL
+await imdb.ensureDataset("title.ratings.tsv.gz");
+imdb.ratings("tt0111161");               // { averageRating, numVotes }
+imdb.seriesEpisodes("tt0903747");        // season/episode rows
+```
+
+Every method enforces the IMDb-only allow-list. Only three runtime
+dependencies exist (`cheerio`, `commander`, `playwright`) — each verified
+to earn its place (a stealth-plugin experiment was tested and rejected
+because it did not improve WAF solving).
+
 ## License
 
 Polyform Non-Commercial License 1.0.0 — see `LICENSE`.

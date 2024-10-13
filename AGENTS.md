@@ -52,5 +52,10 @@ SPEAK ENGLISH
   with jitter, resume/skip of already-scraped ids, structured JSON output.
 - No hard-coded hashed CSS classes. Selectors live in `src/imdb/selectors.ts`
   (stable `data-testid` / semantic selectors only).
+- New IMDb data-access code goes through the `ImdbClient` library
+  (`src/imdb/client.ts`, barrel `src/imdb/index.ts`). No ad-hoc IMDb fetches.
+- Dependencies are justified by verification: a library is added only after an
+  experiment proves it improves IMDb extraction. No decorative dependencies.
+  External captcha/WAF-solving services are forbidden (non-IMDb sources).
 - Verify by execution: unit tests (vitest, offline fixtures) for every new
   extractor/parser; `npm run build` before finishing.
