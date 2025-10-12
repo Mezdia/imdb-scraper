@@ -52,6 +52,7 @@ export type {
   CrawlOptions,
   CreditEntry,
   EpisodeRef,
+  GalleryPhoto,
   MediaKind,
   ParentalGuideItem,
   Review,

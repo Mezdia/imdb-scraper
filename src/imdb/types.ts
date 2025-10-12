@@ -47,6 +47,11 @@ export interface EpisodeRef {
   plot?: string;
 }
 
+export interface GalleryPhoto {
+  url: string;
+  caption?: string;
+}
+
 export interface TrailerRef {
   id: string;
   name?: string;
@@ -126,7 +131,7 @@ export interface TitleRecord {
   // --- H. Media gallery (IMDb CDN only) ------------------------------------------
   poster?: string | null;
   posterCaption?: string | null;
-  gallery?: string[] | null;
+  gallery?: GalleryPhoto[] | null;
   photoCount?: number | null;
   videoCount?: number | null;
   trailers?: TrailerRef[] | null;

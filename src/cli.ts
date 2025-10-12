@@ -224,6 +224,16 @@ program
         `IMDb-only note: ${failed} title(s) incomplete — all recovery stayed inside IMDb (datasets/suggestion/browser). No external source was used. Re-run with --datasets or check data.json "missing" fields.`,
       );
     }
+    const wafBlocked = results.filter((r) =>
+      (r.missing ?? []).some((m) => m.includes("page-html")),
+    ).length;
+    if (wafBlocked > 0 && crawl.headless && crawl.engine !== "datasets") {
+      logger.warn(
+        `Creative fix for ${wafBlocked} WAF-blocked record(s): the AWS challenge only ` +
+          `solves in a headed browser. Re-run with a display, e.g.: ` +
+          `xvfb-run -a node ./dist/cli.js <ids> --head`,
+      );
+    }
   });
 
 program

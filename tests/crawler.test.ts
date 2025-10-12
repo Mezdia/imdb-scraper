@@ -80,4 +80,35 @@ describe("store + viewer (IMDb-only)", () => {
     expect(html).not.toContain("bing.net");
     expect(html).not.toContain("tse2.mm.bing");
   });
+
+  it("viewer renders captioned gallery + episode cards with stills", () => {
+    const withMedia: TitleRecord = {
+      ...rec,
+      gallery: [
+        { url: "https://m.media-amazon.com/images/M/a.jpg", caption: "Tim Robbins in chains" },
+        { url: "https://m.media-amazon.com/images/M/b.jpg" },
+      ],
+      episodes: [
+        {
+          imdbId: "tt0959621",
+          season: 1,
+          episode: 1,
+          title: "Pilot",
+          airDate: "2008-01-20",
+          rating: "9.1",
+          votes: 86582,
+          poster: "https://m.media-amazon.com/images/M/ep1.jpg",
+          plot: "Diagnosis day.",
+        },
+      ],
+      episodeCount: 1,
+    };
+    const html = renderViewerHtml(withMedia);
+    expect(html).toContain("Tim Robbins in chains");
+    expect(html).toContain("Pilot");
+    expect(html).toContain("2008-01-20");
+    expect(html).toContain("Diagnosis day.");
+    expect(html).toContain("ep1.jpg");
+    expect(html).toContain("86,582");
+  });
 });

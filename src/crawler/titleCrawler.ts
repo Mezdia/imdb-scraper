@@ -11,6 +11,7 @@ import {
 import type { CrawlOptions, EpisodeRef, TitleRecord } from "../imdb/types.js";
 import { BrowserEngine, fetchImdbHtml } from "./engine.js";
 import {
+  canonicalImageId,
   extractCastFallback,
   extractDetailsFallback,
   extractGallery,
@@ -414,9 +415,31 @@ export async function crawlTitle(
   }
 
   // --- Gallery (title <img> always; mediaindex when requested) ----------------
-  const gallery = extractGallery(html, opts.maxGalleryPhotos);
-  if (rec.poster && !gallery.includes(rec.poster) && gallery.length < opts.maxGalleryPhotos) {
-    gallery.unshift(rec.poster);
+  // Entries carry captions where IMDb provides them (mediaindex nodes).
+  const gallery: { url: string; caption?: string }[] = [];
+  const seenUrls = new Set<string>();
+  const addPhoto = (url: string | undefined, caption?: string) => {
+    if (!url || gallery.length >= opts.maxGalleryPhotos) return;
+    // Dedupe by canonical image id so crop variants of one still collapse.
+    const key = canonicalImageId(url) ?? url;
+    if (seenUrls.has(key)) {
+      if (caption) {
+        const existing = gallery.find((g) => (canonicalImageId(g.url) ?? g.url) === key);
+        if (existing && !existing.caption) existing.caption = caption;
+      }
+      return;
+    }
+    seenUrls.add(key);
+    gallery.push(caption ? { url, caption } : { url });
+  };
+  for (const u of extractGallery(html, opts.maxGalleryPhotos)) addPhoto(u);
+  // Poster leads the gallery.
+  if (rec.poster) {
+    const at = gallery.findIndex((g) => g.url === rec.poster);
+    if (at >= 0) gallery.splice(at, 1);
+    gallery.unshift(
+      rec.posterCaption ? { url: rec.poster, caption: rec.posterCaption } : { url: rec.poster },
+    );
   }
   if (opts.includeGallery) {
     const photosHtml = await loadHtml([photosUrl(id)], engine, provenance, "photos");
@@ -424,13 +447,11 @@ export async function crawlTitle(
       const photoNd = extractNextData(photosHtml);
       if (photoNd) {
         for (const ph of parseGalleryNodes(photoNd, opts.maxGalleryPhotos)) {
-          if (gallery.length >= opts.maxGalleryPhotos) break;
-          if (!gallery.includes(ph.url)) gallery.push(ph.url);
+          addPhoto(ph.url, ph.caption);
         }
       }
       for (const gh of extractGallery(photosHtml, opts.maxGalleryPhotos)) {
-        if (gallery.length >= opts.maxGalleryPhotos) break;
-        if (!gallery.includes(gh)) gallery.push(gh);
+        addPhoto(gh);
       }
       provenance.push("page:mediaindex");
     } else {

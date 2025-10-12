@@ -31,11 +31,17 @@ export function renderViewerHtml(rec: TitleRecord): string {
     .map((r) => `<div class="review-card"><span class="review-title">${esc(r.title || "Review")}</span><p>${esc(r.content || "")}</p><div class="rmeta">${[r.author ? `by ${esc(r.author)}` : "", r.rating != null ? `${r.rating}/10` : "", r.date ? esc(r.date) : ""].filter(Boolean).join(" · ")}</div></div>`)
     .join("");
   const eps = (rec.episodes ?? [])
-    .map((e) => `<li><code>${esc(e.imdbId)}</code>${e.season != null ? ` — S${e.season}E${e.episode ?? "?"}` : ""} ${esc(e.title ?? "")}</li>`)
+    .map((e) => `<div class="ep-card">
+${e.poster ? `<img src="${esc(e.poster)}" alt="" loading="lazy" onerror="this.remove()">` : ""}
+<div class="ep-body">
+<div class="ep-head"><code>${esc(e.imdbId)}</code>${e.season != null ? ` <b>S${e.season}E${e.episode ?? "?"}</b>` : ""} <span class="ep-title">${esc(e.title ?? "")}</span></div>
+${e.airDate || e.rating ? `<div class="ep-meta">${esc(e.airDate ?? "")}${e.airDate && e.rating ? " · " : ""}${e.rating ? `★ ${esc(e.rating)}${e.votes ? ` (${e.votes.toLocaleString()})` : ""}` : ""}</div>` : ""}
+${e.plot ? `<div class="ep-plot">${esc(e.plot)}</div>` : ""}
+</div></div>`)
     .join("");
   const gallery = (rec.gallery ?? [])
     .slice(0, 40)
-    .map((g) => `<a href="${esc(g)}" target="_blank" rel="noopener"><img src="${esc(g)}" loading="lazy" onerror="this.remove()"></a>`)
+    .map((g) => `<figure><a href="${esc(g.url)}" target="_blank" rel="noopener"><img src="${esc(g.url)}" loading="lazy" ${g.caption ? `alt="${esc(g.caption)}" title="${esc(g.caption)}"` : `alt=""`} onerror="this.closest('figure').remove()"></a>${g.caption ? `<figcaption>${esc(g.caption)}</figcaption>` : ""}</figure>`)
     .join("");
   const facts: [string, string][] = [];
   if (rec.originalTitle && rec.originalTitle !== rec.title) facts.push(["Original title", rec.originalTitle]);  if (rec.releaseDate) facts.push(["Release date", rec.releaseDate]);
@@ -97,6 +103,16 @@ h2{font-family:Georgia,serif;margin:2rem 0 .6rem;border-left:4px solid var(--gol
 .rmeta{color:var(--muted);font-size:.78rem;margin-top:.4rem}
 .pgdesc{font-size:.82rem;color:#d1d5db;margin:.2rem 0 .6rem;flex-basis:100%}
 ul.eps{columns:2;list-style:none}ul.eps li{padding:.25rem 0;color:var(--muted);font-size:.9rem}
+.eps{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:.7rem;margin-top:.6rem}
+.ep-card{display:flex;gap:.7rem;background:rgba(31,41,55,.4);border:1px solid var(--border);border-radius:8px;padding:.7rem}
+.ep-card img{width:110px;align-self:flex-start;border-radius:6px;border:1px solid var(--border)}
+.ep-body{min-width:0;flex:1}
+.ep-head{font-size:.9rem;margin-bottom:.2rem}
+.ep-title{font-weight:bold}
+.ep-meta{color:var(--gold);font-size:.8rem;margin-bottom:.3rem}
+.ep-plot{font-size:.83rem;color:#d1d5db;line-height:1.5}
+.gallery figure{margin:0}
+.gallery figcaption{font-size:.72rem;color:var(--muted);padding:.25rem 0;line-height:1.4}
 ul.trailers{list-style:none;margin-top:.6rem}ul.trailers li{padding:.3rem 0}
 .missing{background:#3b2f0b;border:1px solid var(--gold);padding:.7rem;border-radius:6px;margin-top:1rem;font-size:.9rem}
 .prov{color:#6b7280;font-size:.75rem;margin-top:1.5rem;word-break:break-all}
@@ -121,7 +137,7 @@ ${(rec.trailers ?? []).length ? `<h2>Trailers</h2><ul class="trailers">${(rec.tr
 ${gallery ? `<h2>Gallery (${(rec.gallery ?? []).length})</h2><div class="gallery">${gallery}</div>` : ""}
 ${pg ? `<h2>Parents Guide</h2><div class="badges">${pg}</div>` : ""}
 ${cast ? `<h2>Cast</h2><div class="cast-grid">${cast}</div>` : ""}
-${eps ? `<h2>Episodes (${rec.episodeCount ?? rec.episodes?.length ?? 0})</h2><ul class="eps">${eps}</ul>` : ""}
+${eps ? `<h2>Episodes (${rec.episodeCount ?? rec.episodes?.length ?? 0})</h2><div class="eps">${eps}</div>` : ""}
 ${reviews ? `<h2>Reviews</h2><div class="reviews">${reviews}</div>` : ""}
 ${rec.missing?.length ? `<div class="missing">Partial record — unavailable from IMDb at scrape time: ${rec.missing.map(esc).join("; ")}</div>` : ""}
 <div class="prov">Scraped ${esc(rec.scrapedAt)} · provenance: ${esc(rec.provenance.join(" | "))} · IMDb-only (see AGENTS.md)</div>
