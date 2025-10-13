@@ -63,9 +63,11 @@ export function extractNextData(html: string): Record<string, unknown> | null {
 export function isWafChallengeHtml(html: string): boolean {
   return (
     html.includes("AwsWafIntegration") ||
+    html.includes("AwsWaf") ||
     html.includes("challenge.js") ||
     html.includes("gokuProps") ||
-    html.includes('id="challenge-container"')
+    html.includes('id="challenge-container"') ||
+    html.includes("<title>Human Verification</title>")
   );
 }
 

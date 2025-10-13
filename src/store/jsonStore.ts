@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { TitleRecord } from "../imdb/types.js";
 import { logger } from "../logger.js";
@@ -130,6 +130,26 @@ export function alreadyScraped(outRoot: string, rec: { imdbId: string; title: st
     const arr = parseListFile(join(dir, "data.json"));
     return arr.some((r) => r.imdbId === rec.imdbId);
   }
-  const dir = titleDir(outRoot, rec as TitleRecord, listName);
-  return existsSync(join(dir, "data.json"));
+  // NOTE: the stored folder name embeds the real title/year, which the
+  // pre-crawl stub (title=id) cannot predict — so scan for the id-tagged
+  // folder instead of reconstructing the path. Checks both Movies/Series.
+  return findRecordDir(outRoot, rec.imdbId) !== null;
+}
+
+/** Locate an existing record dir by its [tt...] id tag (any section). */
+export function findRecordDir(outRoot: string, imdbId: string): string | null {
+  for (const root of [join(outRoot, "Movies"), join(outRoot, "Series")]) {
+    let entries: string[];
+    try {
+      entries = readdirSync(root);
+    } catch {
+      continue;
+    }
+    for (const e of entries) {
+      if (e.includes(`[${imdbId}]`) && existsSync(join(root, e, "data.json"))) {
+        return join(root, e);
+      }
+    }
+  }
+  return null;
 }

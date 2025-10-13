@@ -8,7 +8,7 @@ import { ensureDataset, datasetUrl } from "./imdb/datasets.js";
 import { BrowserEngine } from "./crawler/engine.js";
 import { crawlTitle } from "./crawler/titleCrawler.js";
 import { runWithConcurrency } from "./crawler/queue.js";
-import { storeRecord, alreadyScraped } from "./store/jsonStore.js";
+import { storeRecord, alreadyScraped, findRecordDir } from "./store/jsonStore.js";
 import { writeViewer, writePortable, writeListViewer } from "./store/html.js";
 import { DEFAULT_CRAWL_OPTIONS, type CrawlOptions, type TitleRecord } from "./imdb/types.js";
 import { logger, setVerbose } from "./logger.js";
@@ -149,8 +149,31 @@ program
       async (id) => {
         const pre = { imdbId: id, title: id, kind: "movie", year: null } as const;
         if (opts.resume && alreadyScraped(outRoot, { ...pre, kind: opts.type ?? "movie" }, listName)) {
-          logger.info(`Resume: skipping already-scraped ${id}`);
-          return;
+          // Re-crawl PARTIAL records (WAF-blocked earlier) instead of
+          // skipping them forever — only skip complete ones.
+          let complete = true;
+          try {
+            if (listName) {
+              const listRaw = JSON.parse(readFileSync(join(outRoot, "Lists", listName, "data.json"), "utf8")) as unknown;
+              const found = Array.isArray(listRaw)
+                ? (listRaw as TitleRecord[]).find((r) => r.imdbId === id)
+                : undefined;
+              complete = !!found && !(found.missing ?? []).some((m) => m.includes("page-html"));
+            } else {
+              const dir = findRecordDir(outRoot, id);
+              if (dir) {
+                const existing = JSON.parse(readFileSync(join(dir, "data.json"), "utf8")) as TitleRecord;
+                complete = !(existing.missing ?? []).some((m) => m.includes("page-html"));
+              }
+            }
+          } catch {
+            complete = false;
+          }
+          if (complete) {
+            logger.info(`Resume: skipping already-scraped ${id}`);
+            return;
+          }
+          logger.info(`Resume: re-crawling partial record ${id}`);
         }
         const t0 = Date.now();
         logger.info(`[${id}] crawling…`);

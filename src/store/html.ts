@@ -153,9 +153,13 @@ export function writeViewer(path: string, rec: TitleRecord): void {
 /** Inline data.json into a single portable.html (offline sharing). */
 export function writePortable(dir: string, rec: TitleRecord): string {
   const html = renderViewerHtml(rec);
+  // Embed the FULL record (never truncate — a slice can cut mid-JSON and
+  // produce a broken page for large series). Escape `<` so `</script>`
+  // inside review text cannot break out of the inline script block.
+  const payload = JSON.stringify(rec).replace(/</g, "\\u003c");
   const embedded = html.replace(
     "window.__RECORD__ = null;",
-    `window.__RECORD__ = ${JSON.stringify(rec).slice(0, 2_000_000)};`,
+    `window.__RECORD__ = ${payload};`,
   );
   const out = `${dir.replace(/\/$/, "")}/portable.html`;
   writeFileSync(out, embedded, "utf8");

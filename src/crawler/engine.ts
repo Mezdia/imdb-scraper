@@ -1,4 +1,4 @@
-import { assertImdbOnlyUrl } from "../imdb/guard.js";
+import { assertImdbOnlyUrl, imdbFetch } from "../imdb/guard.js";
 import { imdbHtmlHeaders } from "../imdb/constants.js";
 import { isWafChallengeHtml } from "./extractors.js";
 import { logger } from "../logger.js";
@@ -96,10 +96,21 @@ export class BrowserEngine {
       try {
         return await page.evaluate(() => {
           if (document.querySelector("#challenge-container")) return false;
+          // Prefer the rich embedded payload; IMDb sometimes serves a
+          // lightweight variant (ld+json only, no __NEXT_DATA__) that loses
+          // GraphQL facts — keep waiting briefly for the full payload.
           if (document.querySelector("#__NEXT_DATA__")) return true;
           if (document.querySelector('script[type="application/ld+json"]')) return true;
           return document.body && document.body.innerText.length > 2000;
         });
+      } catch {
+        return false;
+      }
+    };
+
+    const hasRichPayload = async (): Promise<boolean> => {
+      try {
+        return await page.evaluate(() => !!document.querySelector("#__NEXT_DATA__"));
       } catch {
         return false;
       }
@@ -123,6 +134,15 @@ export class BrowserEngine {
           logger.warn(`WAF challenge at ${url} (attempt ${attempt + 1}); reloading…`);
           await page.reload({ waitUntil: "domcontentloaded" }).catch(() => undefined);
           solved = await waitForSolve(20_000);
+        }
+        // Solved but lightweight (no __NEXT_DATA__)? One reload often yields
+        // the rich variant — try once before accepting the degraded page.
+        if (solved && !(await hasRichPayload())) {
+          await page.reload({ waitUntil: "domcontentloaded" }).catch(() => undefined);
+          const rich = await waitForSolve(15_000);
+          if (rich && (await hasRichPayload())) {
+            solved = true;
+          }
         }
         const html = await page.content();
         const waf = !solved && isWafChallengeHtml(html);
@@ -225,7 +245,7 @@ export async function fetchImdbHtml(url: string, timeoutMs = 30_000): Promise<st
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
-    const res = await fetch(url, { headers: imdbHtmlHeaders(), signal: ctrl.signal });
+    const res = await imdbFetch(url, { headers: imdbHtmlHeaders(), signal: ctrl.signal });
     const text = await res.text();
     if (!text || text.length < 500) {
       logger.warn(`IMDb returned empty/blocked body (${res.status}) for ${url} — escalate to browser engine`);

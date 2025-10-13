@@ -79,30 +79,92 @@ function kindFromGql(p: { isSeries?: boolean; isEpisode?: boolean; titleTypeId?:
   return "unknown";
 }
 
+/**
+ * Richness score for candidate page HTML (pure, unit-tested).
+ *  2 = embedded GraphQL title node (full facts)
+ *  1 = __NEXT_DATA__ without a title node (aux pages)
+ *  0 = JSON-LD / long DOM fallback (degraded title variant)
+ * -1 = WAF challenge / empty (unusable)
+ */
+export function scoreHtmlRichness(html: string): number {
+  if (isWafChallengeHtml(html)) return -1;
+  try {
+    const nd = extractNextData(html);
+    if (nd) {
+      try {
+        if (titleNode(nd)) return 2;
+      } catch {
+        // fall through
+      }
+      return 1;
+    }
+  } catch {
+    // fall through to DOM scoring
+  }
+  if (html.includes("application/ld+json")) return 0;
+  return html.length > 1000 ? 0 : -1;
+}
+
 async function loadHtml(urls: string[], engine: BrowserEngine | null, provenance: string[], tag: string): Promise<string | null> {
+  // IMDb flakily serves a lightweight title variant (ld+json only, no
+  // __NEXT_DATA__) that loses all GraphQL facts. Fetch every candidate URL
+  // and keep the RICHEST payload instead of the first success.
+  const richness = (html: string): number => scoreHtmlRichness(html);
+  let best: string | null = null;
+  let bestScore = -1;
+  let bestUrl = "";
+  let bestSource: "http" | "browser" = "http";
   for (const u of urls) {
     const http = await fetchImdbHtml(u);
-    if (http && !isWafChallengeHtml(http)) {
-      provenance.push(`http:${u}`);
-      return http;
+    if (http) {
+      const s = richness(http);
+      if (s > bestScore) {
+        best = http;
+        bestScore = s;
+        bestUrl = u;
+        bestSource = "http";
+      }
+      if (s >= 2) break; // richest possible via HTTP — stop early
+      if (s < 0) logger.warn(`HTTP ${tag} failed for ${u} — escalate to browser engine`);
+    } else {
+      logger.warn(`HTTP ${tag} failed for ${u} — escalate to browser engine`);
     }
-    logger.warn(`HTTP ${tag} failed for ${u} — escalate to browser engine`);
+  }
+  if (bestScore >= 2) {
+    provenance.push(`http:${bestUrl}`);
+    return best;
   }
   if (engine) {
     for (const u of urls) {
       try {
         const snap = await engine.goto(u);
         if (!snap.wafChallenge && snap.html.length > 1000) {
-          provenance.push(`browser:${u}`);
-          return snap.html;
+          const s = richness(snap.html);
+          if (s > bestScore) {
+            best = snap.html;
+            bestScore = s;
+            bestUrl = u;
+            bestSource = "browser";
+          }
+          if (s >= 2) break;
+          if (s >= 0) logger.warn(`Browser ${tag} degraded (no embedded GraphQL) for ${u}`);
+          else logger.warn(`Browser ${tag} still challenged for ${u}`);
+        } else {
+          logger.warn(`Browser ${tag} still challenged for ${u}`);
         }
-        logger.warn(`Browser ${tag} still challenged for ${u}`);
       } catch (e) {
         logger.warn(`Browser ${tag} failed for ${u}: ${(e as Error).message}`);
       }
     }
+    if (best && bestScore >= 0) {
+      provenance.push(`${bestSource}:${bestUrl}`);
+      return best;
+    }
+  } else if (best && bestScore >= 0) {
+    provenance.push(`http:${bestUrl}`);
+    return best;
   }
-  return null;
+  return best && bestScore >= 0 ? best : null;
 }
 
 export function suggestionKindToMediaKind(q: string): TitleRecord["kind"] {
@@ -433,9 +495,11 @@ export async function crawlTitle(
     gallery.push(caption ? { url, caption } : { url });
   };
   for (const u of extractGallery(html, opts.maxGalleryPhotos)) addPhoto(u);
-  // Poster leads the gallery.
+  // Poster leads the gallery (dedupe by canonical image id — poster crops
+  // differ in query params from gallery variants of the same still).
   if (rec.poster) {
-    const at = gallery.findIndex((g) => g.url === rec.poster);
+    const posterKey = canonicalImageId(rec.poster) ?? rec.poster;
+    const at = gallery.findIndex((g) => (canonicalImageId(g.url) ?? g.url) === posterKey);
     if (at >= 0) gallery.splice(at, 1);
     gallery.unshift(
       rec.posterCaption ? { url: rec.poster, caption: rec.posterCaption } : { url: rec.poster },
@@ -526,6 +590,11 @@ export async function crawlTitle(
     }
     if (!seasons.length && rec.totalSeasons) {
       seasons = Array.from({ length: rec.totalSeasons }, (_, i) => i + 1);
+    }
+    if (!seasons.length) {
+      // Series with an unparseable season list (lightweight page variant):
+      // probe season 1 so episodes are not silently skipped.
+      seasons = [1];
     }
     if (seasons.length) provenance.push("page:__NEXT_DATA__");
     for (const s of seasons.slice(0, 60)) {

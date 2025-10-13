@@ -198,7 +198,9 @@ export function parseTitleNode(node: Json): ParsedTitle {
   const tt = asObj(node["titleType"]);
   out.titleTypeId = str(tt?.["id"])?.toLowerCase();
   out.titleTypeText = str(tt?.["text"]);
-  out.isSeries = tt?.["isSeries"] === true;
+  // Live titleType often omits boolean flags and only carries
+  // {id, canHaveEpisodes}. Derive series-ness from canHaveEpisodes too.
+  out.isSeries = tt?.["isSeries"] === true || tt?.["canHaveEpisodes"] === true;
   out.isEpisode = tt?.["isEpisode"] === true;
   out.canHaveEpisodes = tt?.["canHaveEpisodes"] === true;
   if (typeof node["isAdult"] === "boolean") out.isAdult = node["isAdult"] as boolean;
@@ -277,19 +279,44 @@ export function parseTitleNode(node: Json): ParsedTitle {
     .slice(0, 25);
   if (!out.akas.length) delete out.akas;
 
-  // Principal credits grouped by department (two shapes across pages:
-  // principalCreditsV2 with grouping.text, or principalCredits with
-  // category.text).
+  // Principal credits grouped by department (three shapes across pages:
+  // principalCreditsV2 with grouping.text, principalCredits with
+  // category.text, or crewV2 with grouping.text). The /reference/ variant
+  // omits grouping.text and only carries groupingId UUIDs, so known IMDb
+  // category UUIDs are mapped as well (observed live Oct 2026).
+  const DIRECTOR_GROUP_IDS = new Set([
+    "amzn1.imdb.concept.name_credit_category.ace5cb4c-8708-4238-9542-04641e7c8171",
+  ]);
+  const WRITER_GROUP_IDS = new Set([
+    "amzn1.imdb.concept.name_credit_category.c84ecaff-add5-4f2e-81db-102a41881fe3",
+  ]);
   const groupsV2 = (Array.isArray(node["principalCreditsV2"]) ? (node["principalCreditsV2"] as unknown[]) : [])
     .map(asObj)
     .filter((g): g is Json => !!g);
   const groupsV1 = (Array.isArray(node["principalCredits"]) ? (node["principalCredits"] as unknown[]) : [])
     .map(asObj)
     .filter((g): g is Json => !!g);
+  const groupsCrew = (Array.isArray(node["crewV2"]) ? (node["crewV2"] as unknown[]) : [])
+    .map(asObj)
+    .filter((g): g is Json => !!g);
+  const groupLabel = (g: Json): { text: string; gid: string } => {
+    const grouping = asObj(g["grouping"]);
+    const category = asObj(g["category"]);
+    return {
+      text: (str(grouping?.["text"]) ?? str(category?.["text"]) ?? "").toLowerCase(),
+      gid: str(grouping?.["groupingId"]) ?? str(category?.["id"]) ?? "",
+    };
+  };
+  const labelMatches = (label: string, gid: string, names: string[]): boolean => {
+    if (names.some((n) => label.includes(n))) return true;
+    if (names.includes("director") && DIRECTOR_GROUP_IDS.has(gid)) return true;
+    if (names.includes("writer") && WRITER_GROUP_IDS.has(gid)) return true;
+    return false;
+  };
   const byGroup = (names: string[]): { name: string; id?: string }[] => {
     const outG: { name: string; id?: string }[] = [];
-    const pull = (label: string, credits: unknown) => {
-      if (!names.some((n) => label.includes(n))) return;
+    const pull = (label: string, gid: string, credits: unknown) => {
+      if (!labelMatches(label, gid, names)) return;
       const list = Array.isArray(credits) ? credits : [];
       for (const c of list) {
         const name = asObj(asObj(c)?.["name"]);
@@ -299,10 +326,18 @@ export function parseTitleNode(node: Json): ParsedTitle {
       }
     };
     for (const g of groupsV2) {
-      pull(str(asObj(g["grouping"])?.["text"])?.toLowerCase() ?? "", g["credits"]);
+      const { text, gid } = groupLabel(g);
+      pull(text, gid, g["credits"]);
     }
     for (const g of groupsV1) {
-      pull(str(asObj(g["category"])?.["text"])?.toLowerCase() ?? "", g["credits"]);
+      const { text, gid } = groupLabel(g);
+      pull(text, gid, g["credits"]);
+    }
+    // crewV2 carries Director/Writer groups with text on the title page
+    // (first-wins merge keeps node0's copy) — same matching rules.
+    for (const g of groupsCrew) {
+      const { text, gid } = groupLabel(g);
+      pull(text, gid, g["credits"]);
     }
     return outG;
   };
@@ -584,6 +619,10 @@ export function parseGalleryNodes(nextData: unknown, limit = 20): { url: string;
     }
   };
   collect(title?.["images"]);
+  // Live /mediaindex/ payload nests stills under `all_images` (Oct 2026);
+  // the title page exposes hero stills under `titleMainImages`. Collect all.
+  collect(title?.["all_images"]);
+  collect(title?.["titleMainImages"]);
   const gall = asObj(asObj(asObj(asObj(root?.["props"])?.["pageProps"])?.["contentData"])?.["section"])?.["images"];
   if (gall) collect(gall);
   return out;

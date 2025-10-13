@@ -219,20 +219,25 @@ export async function ensureDataset(file: DatasetFile, base = process.cwd()): Pr
   const res = await imdbFetch(url);
   if (!res.ok || !res.body) throw new Error(`Dataset download failed ${res.status}: ${file}`);
   const tmp = `${dest}.part`;
-  const out = createWriteStream(tmp);
-  const nodeStream = res.body as unknown as NodeJS.ReadableStream;
-  const gunzip = createGunzip();
-  // res.body is a web stream; convert via async iteration is complex — use Response.arrayBuffer for simplicity
-  const buf = Buffer.from(await res.arrayBuffer());
-  writeFileSync(`${dest}.gz`, buf);
-  await pipeline(
-    (await import("node:fs")).createReadStream(`${dest}.gz`),
-    createGunzip(),
-    out,
-  );
-  void gunzip;
-  void nodeStream;
-  (await import("node:fs")).renameSync(tmp, dest);
+  const gzPath = `${dest}.gz`;
+  try {
+    const buf = Buffer.from(await res.arrayBuffer());
+    writeFileSync(gzPath, buf);
+    const out = createWriteStream(tmp);
+    await pipeline(
+      (await import("node:fs")).createReadStream(gzPath),
+      createGunzip(),
+      out,
+    );
+    (await import("node:fs")).renameSync(tmp, dest);
+  } catch (e) {
+    try {
+      (await import("node:fs")).unlinkSync(tmp);
+    } catch {
+      // best effort cleanup
+    }
+    throw e;
+  }
   logger.success(`Cached dataset: ${dest}`);
   return dest;
 }
