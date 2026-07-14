@@ -23,6 +23,8 @@ describe("IMDb-only guard", () => {
       "https://www.omdbapi.com/?i=tt0111161",
       "https://example-proxy.com/https://www.imdb.com/title/tt0111161/",
       "https://evil-imdb.com/title/tt0111161/",
+      "https://media-amazon.com/images/M/fake.jpg",
+      "https://images-na.ssl-images-amazon.com/images/I/fake.js",
     ]) {
       expect(isImdbOnlyUrl(u)).toBe(false);
       expect(() => assertImdbOnlyUrl(u)).toThrow(NonImdbSourceError);

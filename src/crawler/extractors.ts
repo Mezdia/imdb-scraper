@@ -59,16 +59,18 @@ export function extractNextData(html: string): Record<string, unknown> | null {
   }
 }
 
-/** Detect the AWS WAF JS-challenge interstitial (202 + challenge.js). */
+/** Detect the AWS WAF JS-challenge interstitial (202 empty shell).
+ * Solved IMDb pages ALWAYS embed the WAF SDK (challenge.js) for bot
+ * protection — that substring alone is NOT diagnostic and must never flag
+ * a page that already carries the rich payload. Only the interstitial
+ * markers (challenge-container / gokuProps / Human Verification) count. */
 export function isWafChallengeHtml(html: string): boolean {
-  return (
-    html.includes("AwsWafIntegration") ||
-    html.includes("AwsWaf") ||
-    html.includes("challenge.js") ||
-    html.includes("gokuProps") ||
-    html.includes('id="challenge-container"') ||
-    html.includes("<title>Human Verification</title>")
-  );
+  if (html.includes("__NEXT_DATA__")) return false;
+  if (html.includes('id="challenge-container"')) return true;
+  if (html.includes("gokuProps")) return true;
+  if (html.includes("<title>Human Verification</title>")) return true;
+  if (html.includes("AwsWafIntegration") && html.length < 20000) return true;
+  return false;
 }
 
 export function textOf($: cheerio.CheerioAPI, selectors: readonly string[]): string | null {

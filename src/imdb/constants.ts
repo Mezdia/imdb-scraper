@@ -12,7 +12,6 @@ export const ALLOWED_HOSTS = new Set<string>([
   "developer.imdb.com",
   // IMDb image CDN — only for image bytes/URLs IMDb itself returns.
   "m.media-amazon.com",
-  "media-amazon.com",
 ]);
 
 export const IMDB_ORIGIN = "https://www.imdb.com";

@@ -5,6 +5,7 @@ import {
   titleNode,
 } from "../src/crawler/graphql.js";
 import { scoreHtmlRichness } from "../src/crawler/titleCrawler.js";
+import { isWafChallengeHtml } from "../src/crawler/extractors.js";
 import { alreadyScraped, findRecordDir, storeRecord } from "../src/store/jsonStore.js";
 import { writePortable } from "../src/store/html.js";
 import { mkdtempSync } from "node:fs";
@@ -152,6 +153,15 @@ describe("live: lightweight-variant richness scoring", () => {
 
   it("rejects the Human Verification captcha variant even at full length", () => {
     expect(scoreHtmlRichness(HUMAN_VERIFY)).toBe(-1);
+  });
+
+  it("does NOT flag solved pages that embed the WAF SDK (live Oct 2026)", () => {
+    // Real solved title pages always contain the SDK script
+    // (...awswaf.com/.../challenge.js + window.awsWafCookieDomainList)
+    // alongside the rich payload. That alone is not a challenge.
+    const SOLVED_WITH_SDK = `<html><head><script>window.awsWafCookieDomainList=['.imdb.com'];</script><script src="https://fb423e1ef94f.us-east-1.sdk.awswaf.com/fb423e1ef94f/c3382d439950/challenge.js" defer></script><script id="__NEXT_DATA__" type="application/json">{"props":{"pageProps":{"mainColumnData":{"id":"tt0111161","titleText":{"text":"T"}}}}}</script></head><body>${"x".repeat(5000)}</body></html>`;
+    expect(isWafChallengeHtml(SOLVED_WITH_SDK)).toBe(false);
+    expect(scoreHtmlRichness(SOLVED_WITH_SDK)).toBe(2);
   });
 });
 
