@@ -2,7 +2,7 @@
 import { Command } from "commander";
 import { existsSync, readFileSync, mkdirSync } from "node:fs";
 import { join, dirname } from "node:path";
-import { normalizeTitleInput } from "./imdb/ids.js";
+import { normalizeTitleInput, referenceUrl, titleUrl } from "./imdb/ids.js";
 import { searchTitles } from "./imdb/suggestion.js";
 import { ensureDataset, datasetUrl } from "./imdb/datasets.js";
 import { BrowserEngine } from "./crawler/engine.js";
@@ -11,6 +11,12 @@ import { runWithConcurrency } from "./crawler/queue.js";
 import { storeRecord, alreadyScraped, findRecordDir } from "./store/jsonStore.js";
 import { writeViewer, writePortable, writeListViewer } from "./store/html.js";
 import { DEFAULT_CRAWL_OPTIONS, type CrawlOptions, type TitleRecord } from "./imdb/types.js";
+import {
+  DEFAULT_ARCHIVE_OPTIONS,
+  enhanceWithArchiveBeta,
+  normalizeArchiveTimestamp,
+  type ArchiveOptions,
+} from "./archive/index.js";
 import { logger, setVerbose } from "./logger.js";
 
 const program = new Command();
@@ -44,9 +50,32 @@ program
   .option("--retries <n>", "retries per title", "3")
   .option("--resume", "skip titles already scraped (default true)", true)
   .option("--datasets", "pre-download official IMDb datasets for bulk enrichment")
+  .option("--archive-beta", "enable archived-IMDb fallback via web.archive.org (BETA, last-resort only)")
+  .option("--no-archive-beta", "disable archived-IMDb fallback (default)")
+  .option(
+    "--archive-timestamp <ts>",
+    "wayback snapshot with --archive-beta: latest (auto-find newest via CDX) or YYYYMMDDHHMMSS (BETA)",
+    "latest",
+  )
   .option("--verbose", "debug logging")
   .action(async (targets: string[], opts) => {
     setVerbose(Boolean(opts.verbose));
+    let archiveTimestamp = DEFAULT_ARCHIVE_OPTIONS.timestamp;
+    try {
+      archiveTimestamp = normalizeArchiveTimestamp(opts.archiveTimestamp ?? "latest");
+    } catch (e) {
+      logger.error((e as Error).message);
+      process.exit(1);
+    }
+    const archive: ArchiveOptions = {
+      enabled: Boolean(opts.archiveBeta),
+      timestamp: archiveTimestamp,
+    };
+    if (archive.enabled) {
+      logger.warn(
+        `Archive BETA enabled: web.archive.org snapshots are last-resort only (timestamp=${archive.timestamp}).`,
+      );
+    }
     const crawl: CrawlOptions = {
       ...DEFAULT_CRAWL_OPTIONS,
       includeReviews: opts.fast ? false : opts.reviews !== false,
@@ -177,7 +206,19 @@ program
         }
         const t0 = Date.now();
         logger.info(`[${id}] crawling…`);
-        const rec = await crawlTitle(id, crawl, engine);
+        let rec = await crawlTitle(id, crawl, engine);
+        if (archive.enabled && (rec.missing ?? []).some((m) => m.includes("page-html"))) {
+          // BETA last-resort: same IMDb entity via its archived snapshot.
+          // THIN wiring only — all archive logic lives in src/archive/.
+          try {
+            rec = (await enhanceWithArchiveBeta(rec, archive, [
+              titleUrl(id),
+              referenceUrl(id),
+            ])) as TitleRecord;
+          } catch (e) {
+            logger.warn(`Archive BETA miss for ${id}: ${(e as Error).message}`);
+          }
+        }
         if (opts.type === "movie" || opts.type === "series") rec.kind = opts.type;
         const stored = storeRecord(outRoot, rec, listName);
         if (opts.html !== false) {
@@ -217,7 +258,17 @@ program
             async (epId) => {
               const existing = results.find((r) => r.imdbId === epId);
               if (existing) return;
-              const epRec = await crawlTitle(epId, epOpts, engine);
+              let epRec = await crawlTitle(epId, epOpts, engine);
+              if (archive.enabled && (epRec.missing ?? []).some((m) => m.includes("page-html"))) {
+                try {
+                  epRec = (await enhanceWithArchiveBeta(epRec, archive, [
+                    titleUrl(epId),
+                    referenceUrl(epId),
+                  ])) as TitleRecord;
+                } catch (e) {
+                  logger.warn(`Archive BETA miss for ${epId}: ${(e as Error).message}`);
+                }
+              }
               epRec.seriesId = id;
               const storedEp = storeRecord(outRoot, epRec, listName);
               if (opts.html !== false && !listName) writeViewer(storedEp.indexHtml, epRec);
@@ -243,8 +294,14 @@ program
     await engine?.close().catch(() => undefined);
     logger.success(`Done: ${ok} ok, ${failed} failed. Output: ${outRoot}/`);
     if (failed > 0) {
+      const hint = archive.enabled
+        ? `Re-run with --datasets or check data.json "missing" fields (archive BETA was ON).`
+        : `Re-run with --datasets or check data.json "missing" fields. ` +
+          `If pages stay WAF-blocked, retry with the isolated BETA fallback: --archive-beta ` +
+          `--archive-timestamp latest (web.archive.org snapshots, last-resort only).`;
       logger.warn(
-        `IMDb-only note: ${failed} title(s) incomplete — all recovery stayed inside IMDb (datasets/suggestion/browser). No external source was used. Re-run with --datasets or check data.json "missing" fields.`,
+        `IMDb-only note: ${failed} title(s) incomplete — recovery stayed inside IMDb (datasets/suggestion/browser)` +
+          `${archive.enabled ? " + archive-BETA snapshots" : ""}. No external source was used. ${hint}`,
       );
     }
     const wafBlocked = results.filter((r) =>

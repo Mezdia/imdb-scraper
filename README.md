@@ -59,9 +59,34 @@ node ./dist/cli.js tt0111161 --gallery --max-photos 20
 
 # Bulk enrichment from official IMDb datasets (one-time download)
 node ./dist/cli.js tt0111161 --datasets
+
+# Archive fallback (BETA, last-resort only — off by default)
+node ./dist/cli.js tt0111161 --archive-beta --archive-timestamp latest
 ```
 
 Full flags: `node ./dist/cli.js --help`.
+
+## Archive fallback (BETA, isolated)
+
+When every live method fails (HTTP → browser WAF solving → alternate IMDb
+URL forms → datasets/suggestion → embedded-data parsing) and the record is
+still `missing: page-html`, the crawler can retry the exact same IMDb URL
+via its Wayback snapshot:
+
+`https://web.archive.org/web/<timestamp>id_/https://www.imdb.com/...`
+
+- Opt-in only: `--archive-beta` (default OFF — zero archive I/O without it),
+  `--archive-timestamp latest|YYYYMMDDHHMMSS` (default `latest` = auto-resolved
+  newest available snapshot via Wayback CDX lookup for that exact IMDb URL,
+  with `2id_` redirect as fallback).
+- Isolated by design: all code lives in `src/archive/` (`archiveGuard.ts`,
+  `archiveClient.ts`, `archiveTypes.ts`) with its own `assertArchiveUrl()`
+  guard. `web.archive.org` is never added to the IMDb allow-list, and
+  `src/imdb/*` / `src/crawler/*` are untouched. Still part of the same
+  `iscrapemdb` binary — no second CLI.
+- Provenance is explicit: `provenance[]` gets
+  `archive:<snapshot-timestamp>:<original-imdb-url>`, plus `archivedAt` /
+  `archiveUrl` fields. Images stay IMDb-CDN-only or placeholder.
 
 ## Output
 
