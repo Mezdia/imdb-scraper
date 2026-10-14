@@ -12,7 +12,9 @@ import type { CrawlOptions, EpisodeRef, TitleRecord } from "../imdb/types.js";
 import { BrowserEngine, fetchImdbHtml } from "./engine.js";
 import {
   canonicalImageId,
+  extractBoxOfficeFallback,
   extractCastFallback,
+  extractCreditsDetailed,
   extractDetailsFallback,
   extractGallery,
   extractJsonLdBlocks,
@@ -175,6 +177,18 @@ export function suggestionKindToMediaKind(q: string): TitleRecord["kind"] {
   return "unknown";
 }
 
+/**
+ * IMDb-only alternate URL forms for the same entity (recovery ladder step 3).
+ * The m.imdb.com mirror serves the same GraphQL payload and often passes
+ * the WAF when www does not. Both hosts are on the closed allow-list.
+ */
+export function alternateImdbUrls(primary: string): string[] {
+  if (primary.includes("://www.imdb.com/")) {
+    return [primary, primary.replace("://www.imdb.com/", "://m.imdb.com/")];
+  }
+  return [primary];
+}
+
 function runtimeText(mins: number | null | undefined): string | null {
   return formatMinutes(mins ?? null);
 }
@@ -248,7 +262,12 @@ export async function crawlTitle(
   };
 
   // --- Layer 2: title page (HTTP -> browser with WAF solving) --------------
-  const html = await loadHtml([url, referenceUrl(id)], engine, provenance, "title");
+  const html = await loadHtml(
+    [...alternateImdbUrls(url), ...alternateImdbUrls(referenceUrl(id))],
+    engine,
+    provenance,
+    "title",
+  );
   if (!html) {
     try {
       const sug = await searchTitles(id, 3);
@@ -313,6 +332,9 @@ export async function crawlTitle(
     if (g.countryIds?.length) rec.countries = g.countryIds.map(countryName);
     if (g.languages?.length) rec.languages = g.languages;
     if (g.filmingLocations?.length) rec.filmingLocations = g.filmingLocations;
+    // GQL production companies (live: production.edges) — DOM details remain
+    // as a second opinion below; union both so neither source is lost.
+    if (g.companies?.length) rec.productionCompanies = [...new Set(g.companies)].slice(0, 10);
     if (g.awardsSummary) rec.awardsSummary = g.awardsSummary;
     if (g.akas?.length && (!rec.akas || !rec.akas.length)) {
       rec.akas = g.akas.map((a) => ({ title: a }));
@@ -448,10 +470,39 @@ export async function crawlTitle(
     rec.releaseDate = det.releaseDate;
     if (!rec.date) rec.date = det.releaseDate;
   }
-  if (det.countries && !rec.countries?.length) rec.countries = det.countries;
-  if (det.languages && !rec.languages?.length) rec.languages = det.languages;
+  // Countries/languages/companies: UNION GraphQL + DOM (never first-wins).
+  // Live Inception proved GQL countriesOfOrigin is partial (GB only) while
+  // DOM details hold the full co-production list (GB + US).
+  if (det.countries?.length) {
+    rec.countries = [...new Set([...(rec.countries ?? []), ...det.countries])].slice(0, 10);
+  }
+  if (det.languages?.length) {
+    rec.languages = [...new Set([...(rec.languages ?? []), ...det.languages])].slice(0, 10);
+  }
   if (det.filmingLocations && !rec.filmingLocations?.length) rec.filmingLocations = det.filmingLocations;
-  if (det.productionCompanies && !rec.productionCompanies?.length) rec.productionCompanies = det.productionCompanies;
+  if (det.productionCompanies?.length) {
+    rec.productionCompanies = [...new Set([...(rec.productionCompanies ?? []), ...det.productionCompanies])].slice(0, 10);
+  }
+  // Box-office DOM second opinion (lightweight variants without GraphQL).
+  const domBox = extractBoxOfficeFallback(html);
+  if (domBox.budget || domBox.grossUSA || domBox.openingWeekend || domBox.grossWorldwide) {
+    rec.boxOffice = {
+      budget: rec.boxOffice?.budget ?? domBox.budget,
+      openingWeekend: rec.boxOffice?.openingWeekend ?? domBox.openingWeekend,
+      grossUSA: rec.boxOffice?.grossUSA ?? domBox.grossUSA,
+      grossWorldwide: rec.boxOffice?.grossWorldwide ?? domBox.grossWorldwide,
+    };
+  }
+  // Principal-credits DOM second opinion (label-aware, not first-block-blind).
+  // Covers lightweight variants where GraphQL credits are absent.
+  const domCredits = extractCreditsDetailed(html);
+  if ((!rec.directors?.length) && domCredits.directors.length) rec.directors = domCredits.directors;
+  if ((!rec.writers?.length) && domCredits.writers.length) rec.writers = domCredits.writers;
+  if (rec.kind === "series" && (!rec.creators?.length) && domCredits.stars.length) {
+    // Series "Created by" blocks are labelled Creator/Star — reuse stars pool
+    // only when GraphQL creators are missing.
+    rec.creators = domCredits.stars.slice(0, 5);
+  }
   if (det.colorInfo) rec.colorInfo = det.colorInfo;
   if (det.soundMix) rec.soundMix = det.soundMix;
   if (!rec.keywords?.length) {
@@ -461,7 +512,7 @@ export async function crawlTitle(
 
   // --- Tagline (own IMDb subpage) --------------------------------------------
   if (!rec.tagline) {
-    const tagHtml = await loadHtml([taglinesUrl(id)], engine, provenance, "taglines");
+    const tagHtml = await loadHtml(alternateImdbUrls(taglinesUrl(id)), engine, provenance, "taglines");
     if (tagHtml) {
       const tagNd = extractNextData(tagHtml);
       const tags = tagNd ? parseTaglines(tagNd) : [];
@@ -506,7 +557,7 @@ export async function crawlTitle(
     );
   }
   if (opts.includeGallery) {
-    const photosHtml = await loadHtml([photosUrl(id)], engine, provenance, "photos");
+    const photosHtml = await loadHtml(alternateImdbUrls(photosUrl(id)), engine, provenance, "photos");
     if (photosHtml) {
       const photoNd = extractNextData(photosHtml);
       if (photoNd) {
@@ -542,7 +593,7 @@ export async function crawlTitle(
         logger.warn(`Deep-review scroll failed for ${id}: ${(e as Error).message}`);
       }
     }
-    rHtml ??= await loadHtml([reviewsUrl(id)], engine, provenance, "reviews");
+    rHtml ??= await loadHtml(alternateImdbUrls(reviewsUrl(id)), engine, provenance, "reviews");
     if (rHtml) {
       const rNd = extractNextData(rHtml);
       const gql = rNd ? parseReviewNodes(rNd, opts.deepReviews ? 100 : 25) : [];
@@ -562,7 +613,7 @@ export async function crawlTitle(
 
   // --- Parental guide (GraphQL categories first, DOM fallback) ------------------
   if (opts.includeParentsGuide) {
-    const pHtml = await loadHtml([parentalGuideUrl(id)], engine, provenance, "pg");
+    const pHtml = await loadHtml(alternateImdbUrls(parentalGuideUrl(id)), engine, provenance, "pg");
     if (pHtml) {
       const pNd = extractNextData(pHtml);
       let pg = pNd ? parseGuideCategories(pNd) : [];
@@ -599,7 +650,7 @@ export async function crawlTitle(
     if (seasons.length) provenance.push("page:__NEXT_DATA__");
     for (const s of seasons.slice(0, 60)) {
       if (eps.length >= opts.maxEpisodes) break;
-      const eHtml = await loadHtml([episodesUrl(id, s)], engine, provenance, "episodes");
+      const eHtml = await loadHtml(alternateImdbUrls(episodesUrl(id, s)), engine, provenance, "episodes");
       if (!eHtml) continue;
       const eNd = extractNextData(eHtml);
       const items = eNd ? parseEpisodeItems(eNd, opts.maxEpisodes) : [];

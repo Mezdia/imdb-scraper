@@ -39,8 +39,11 @@ const TITLE_ND = {
         keywords: { edges: [{ node: { text: "prison" } }] },
         productionBudget: { budget: { amount: 25000000, currency: "USD" } },
         lifetimeGross: { total: { amount: 28767189, currency: "USD" } },
+        worldwideGross: { total: { amount: 28817291, currency: "USD" } },
         openingWeekendGross: { gross: { total: { amount: 727327, currency: "USD" } } },
         countriesOfOrigin: { countries: [{ id: "US" }] },
+        countriesDetails: { countries: [{ id: "US", text: "United States" }] },
+        production: { edges: [{ node: { company: { companyText: { text: "Castle Rock Entertainment" } } } }] },
         spokenLanguages: { spokenLanguages: [{ text: "English" }] },
         filmingLocations: { edges: [{ node: { text: "Butler, Ohio, USA" } }] },
         akas: { edges: [{ node: { text: "Sueño de fuga" } }] },
@@ -97,9 +100,11 @@ describe("graphql title parser", () => {
     expect(p.genres).toEqual(["Drama"]);
     expect(p.keywords).toEqual(["prison"]);
     expect(p.budget).toBe("$25,000,000");
-    expect(p.grossWorldwide).toBe("$28,767,189");
+    expect(p.grossUSA).toBe("$28,767,189");
+    expect(p.grossWorldwide).toBe("$28,817,291");
     expect(p.openingWeekend).toBe("$727,327");
     expect(p.countryIds).toEqual(["US"]);
+    expect(p.companies).toEqual(["Castle Rock Entertainment"]);
     expect(p.languages).toEqual(["English"]);
     expect(p.filmingLocations).toEqual(["Butler, Ohio, USA"]);
     expect(p.akas).toEqual(["Sueño de fuga"]);

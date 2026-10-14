@@ -251,13 +251,36 @@ export function parseTitleNode(node: Json): ParsedTitle {
 
   const pb = asObj(node["productionBudget"]);
   out.budget = moneyOf(pb ? { root: pb } : null, ["root", "budget"]) ?? moneyOf(node, ["productionBudget", "budget"]);
-  out.grossWorldwide = moneyOf(node, ["lifetimeGross", "total"]);
+  // Live shapes (verified Oct 2026): lifetimeGross.total = domestic (US & Canada),
+  // worldwideGross.total = cumulative worldwide. Never map lifetimeGross to
+  // grossWorldwide — that was the #1 box-office bug (Inception showed $292M
+  // worldwide instead of $839M with USA missing).
+  out.grossUSA =
+    moneyOf(node, ["lifetimeGross", "total"]) ?? moneyOf(node, ["grossUSA", "total"]);
+  out.grossWorldwide =
+    moneyOf(node, ["worldwideGross", "total"]) ??
+    moneyOf(node, ["lifetimeGross", "total"]) ??
+    moneyOf(node, ["grossUSA", "total"]);
   out.openingWeekend = moneyOf(node, ["openingWeekendGross", "gross", "total"]);
 
+  // Countries: countriesOfOrigin is often partial (Inception: only GB live),
+  // while countriesDetails carries the full list (GB + US). Merge both (plus
+  // text fallbacks) so no co-production country is silently dropped.
   const coo = asObj(node["countriesOfOrigin"]);
-  const countries = Array.isArray(coo?.["countries"]) ? (coo?.["countries"] as unknown[]) : [];
-  const ids = countries.map((c) => str(asObj(c)?.["id"])).filter((c): c is string => !!c);
-  if (ids.length) out.countryIds = [...new Set(ids)];
+  const cooList = Array.isArray(coo?.["countries"]) ? (coo?.["countries"] as unknown[]) : [];
+  const det = asObj(node["countriesDetails"]);
+  const detList = Array.isArray(det?.["countries"]) ? (det?.["countries"] as unknown[]) : [];
+  const idSet: string[] = [];
+  const seenIds = new Set<string>();
+  for (const c of [...cooList, ...detList]) {
+    const o = asObj(c);
+    const id = str(o?.["id"]) ?? str(o?.["text"]);
+    if (id && !seenIds.has(id)) {
+      seenIds.add(id);
+      idSet.push(id);
+    }
+  }
+  if (idSet.length) out.countryIds = [...new Set(idSet)];
 
   const sl = asObj(node["spokenLanguages"]);
   const langs = Array.isArray(sl?.["spokenLanguages"]) ? (sl?.["spokenLanguages"] as unknown[]) : [];
@@ -270,8 +293,21 @@ export function parseTitleNode(node: Json): ParsedTitle {
     .slice(0, 10);
   if (!out.filmingLocations.length) delete out.filmingLocations;
 
-  // Company credits live behind a separate fullcredits connection; the Details
-  // section DOM fallback (extractDetailsFallback) covers names precisely.
+  // Company credits are embedded on the title node itself
+  // (production.edges[].node.company.companyText.text, verified live).
+  // The Details-section DOM fallback remains as a second opinion in the
+  // crawler, but lightweight page variants without DOM details still get
+  // companies from here.
+  const prod = asObj(node["production"]);
+  const prodEdges = Array.isArray(prod?.["edges"]) ? (prod?.["edges"] as unknown[]) : [];
+  const compNames = prodEdges
+    .map((e) => {
+      const n = asObj(asObj(e)?.["node"]);
+      const company = asObj(n?.["company"]);
+      return str(asObj(company?.["companyText"])?.["text"]) ?? str(company?.["text"]);
+    })
+    .filter((x): x is string => !!x);
+  if (compNames.length) out.companies = [...new Set(compNames)].slice(0, 10);
 
   out.akas = edgeNodes(node["akas"])
     .map((n) => str(n["text"]))
@@ -541,7 +577,7 @@ export function parseGuideCategories(nextData: unknown): ParentalGuideItem[] {
       votes: num(summary?.["votes"]) ?? null,
       totalVotes: num(cat["totalSeverityVotes"]) ?? null,
       breakdown: breakdown.length ? breakdown : undefined,
-      description: details[0]?.spoiler === false ? details[0]?.text : details[0]?.text,
+      description: details[0]?.text,
       details: details.length ? details : undefined,
     });
   }

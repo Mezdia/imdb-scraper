@@ -324,6 +324,36 @@ export function extractDetailsFallback(html: string): {
   };
 }
 
+/** Box-office DOM fallback (stable title-boxoffice-* testids, verified live).
+ * Covers lightweight page variants without embedded GraphQL money facts. */
+export function extractBoxOfficeFallback(html: string): {
+  budget?: string;
+  grossUSA?: string;
+  openingWeekend?: string;
+  grossWorldwide?: string;
+} {
+  const $ = cheerio.load(html);
+  const money = (id: string): string | undefined => {
+    const li = $(`li[data-testid="${id}"]`).first();
+    if (!li.length) return undefined;
+    li.find(".ipc-metadata-list-item__label").remove();
+    const t = li.text().trim().replace(/\s+/g, " ");
+    // Keep the leading money token: "$160,000,000 (estimated)" -> "$160,000,000"
+    const m = t.match(/([$€£¥₹A-Z]{0,4}\s?[\d,]+)/);
+    return m ? (m[1] as string).trim() : t || undefined;
+  };
+  const out: { budget?: string; grossUSA?: string; openingWeekend?: string; grossWorldwide?: string } = {};
+  const b = money("title-boxoffice-budget");
+  if (b) out.budget = b;
+  const g = money("title-boxoffice-grossdomestic");
+  if (g) out.grossUSA = g;
+  const o = money("title-boxoffice-openingweekenddomestic");
+  if (o) out.openingWeekend = o;
+  const w = money("title-boxoffice-cumulativeworldwidegross");
+  if (w) out.grossWorldwide = w;
+  return out;
+}
+
 /**
  * Principal-credits DOM parse: assigns names to Directors / Writers / Stars
  * by reading each block's label (v1 blindly took the first block).

@@ -4,8 +4,8 @@ import {
   parseTitleNode,
   titleNode,
 } from "../src/crawler/graphql.js";
-import { scoreHtmlRichness } from "../src/crawler/titleCrawler.js";
-import { isWafChallengeHtml } from "../src/crawler/extractors.js";
+import { alternateImdbUrls, scoreHtmlRichness } from "../src/crawler/titleCrawler.js";
+import { extractBoxOfficeFallback, isWafChallengeHtml } from "../src/crawler/extractors.js";
 import { alreadyScraped, findRecordDir, storeRecord } from "../src/store/jsonStore.js";
 import { writePortable } from "../src/store/html.js";
 import { mkdtempSync } from "node:fs";
@@ -165,8 +165,7 @@ describe("live: lightweight-variant richness scoring", () => {
   });
 });
 
-describe("live: resume + portable fixes", () => {
-  const rec = (over: Partial<TitleRecord> = {}): TitleRecord => ({
+describe("live: resume + portable fixes", () => {  const rec = (over: Partial<TitleRecord> = {}): TitleRecord => ({
     imdbId: "tt0111161",
     url: "https://www.imdb.com/title/tt0111161/",
     title: "The Shawshank Redemption",
@@ -205,5 +204,97 @@ describe("live: resume + portable fixes", () => {
     const m = html.match(/window\.__RECORD__ = (\{.*?\});/s);
     expect(m).not.toBeNull();
     expect(() => JSON.parse(m?.[1] as string)).not.toThrow();
+  });
+});
+
+describe("live: Inception box-office split + countries merge (Oct 2026)", () => {
+  // Exact live shape for tt1375666: lifetimeGross ($292M domestic) is NOT the
+  // worldwide gross ($839M). countriesOfOrigin held only GB while
+  // countriesDetails held GB + US.
+  const INCEPTION_NODE = {
+    id: "tt1375666",
+    titleText: { text: "Inception" },
+    titleType: { id: "movie" },
+    productionBudget: { budget: { amount: 160000000, currency: "USD" } },
+    lifetimeGross: { total: { amount: 292587330, currency: "USD" } },
+    worldwideGross: { total: { amount: 839796627, currency: "USD" } },
+    openingWeekendGross: { gross: { total: { amount: 62785337, currency: "USD" } } },
+    countriesOfOrigin: { countries: [{ id: "GB" }] },
+    countriesDetails: {
+      countries: [
+        { id: "GB", text: "United Kingdom" },
+        { id: "US", text: "United States" },
+      ],
+    },
+    production: {
+      edges: [
+        { node: { company: { companyText: { text: "Warner Bros." } } } },
+        { node: { company: { companyText: { text: "Legendary Pictures" } } } },
+      ],
+    },
+  };
+
+  it("maps lifetimeGross to grossUSA and worldwideGross to grossWorldwide", () => {
+    const p = parseTitleNode(INCEPTION_NODE as Record<string, unknown>);
+    expect(p.budget).toBe("$160,000,000");
+    expect(p.grossUSA).toBe("$292,587,330");
+    expect(p.grossWorldwide).toBe("$839,796,627");
+    expect(p.openingWeekend).toBe("$62,785,337");
+  });
+
+  it("merges countriesOfOrigin + countriesDetails without loss", () => {
+    const p = parseTitleNode(INCEPTION_NODE as Record<string, unknown>);
+    expect(p.countryIds).toContain("GB");
+    expect(p.countryIds).toContain("US");
+    expect(p.countryIds).toHaveLength(2);
+  });
+
+  it("parses production.edges company names", () => {
+    const p = parseTitleNode(INCEPTION_NODE as Record<string, unknown>);
+    expect(p.companies).toEqual(["Warner Bros.", "Legendary Pictures"]);
+  });
+
+  it("falls back to lifetimeGross when worldwideGross is absent (legacy fixture)", () => {
+    const p = parseTitleNode({
+      id: "tt0111161",
+      lifetimeGross: { total: { amount: 28767189, currency: "USD" } },
+    } as Record<string, unknown>);
+    expect(p.grossUSA).toBe("$28,767,189");
+    expect(p.grossWorldwide).toBe("$28,767,189");
+  });
+});
+
+describe("live: box-office DOM fallback", () => {
+  it("parses title-boxoffice-* testids (live Inception values)", () => {
+    const html = `<html><body><ul>
+<li data-testid="title-boxoffice-budget"><span class="ipc-metadata-list-item__label">Budget</span>$160,000,000 (estimated)</li>
+<li data-testid="title-boxoffice-grossdomestic"><span class="ipc-metadata-list-item__label">Gross US &amp; Canada</span>$292,587,330</li>
+<li data-testid="title-boxoffice-openingweekenddomestic"><span class="ipc-metadata-list-item__label">Opening weekend US &amp; Canada</span>$62,785,337Jul 18, 2010</li>
+<li data-testid="title-boxoffice-cumulativeworldwidegross"><span class="ipc-metadata-list-item__label">Gross worldwide</span>$839,796,627</li>
+</ul></body></html>`;
+    const b = extractBoxOfficeFallback(html);
+    expect(b.budget).toBe("$160,000,000");
+    expect(b.grossUSA).toBe("$292,587,330");
+    expect(b.openingWeekend).toBe("$62,785,337");
+    expect(b.grossWorldwide).toBe("$839,796,627");
+  });
+
+  it("returns empty object when the section is absent", () => {
+    expect(extractBoxOfficeFallback("<html><body></body></html>")).toEqual({});
+  });
+});
+
+describe("live: alternate IMDb URL forms (IMDb-only)", () => {
+  it("adds the m.imdb.com mirror for www URLs", () => {
+    expect(alternateImdbUrls("https://www.imdb.com/title/tt1375666/reviews/")).toEqual([
+      "https://www.imdb.com/title/tt1375666/reviews/",
+      "https://m.imdb.com/title/tt1375666/reviews/",
+    ]);
+  });
+
+  it("leaves non-www URLs untouched", () => {
+    expect(alternateImdbUrls("https://m.imdb.com/title/tt1375666/")).toEqual([
+      "https://m.imdb.com/title/tt1375666/",
+    ]);
   });
 });
