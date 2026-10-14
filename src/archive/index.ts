@@ -2,11 +2,18 @@
 export {
   ArchiveClient,
   enhanceWithArchiveBeta,
+  expandArchiveCandidates,
   extractArchiveGallery,
+  isArchiveErrorPage,
+  isTitleBlockType,
+  isTitleJsonLd,
   isWaybackMiss,
   mergeArchiveIntoRecord,
+  parseArchiveTitle,
   pickLatestCdxTimestamp,
+  pickRecentCdxTimestamps,
   scoreArchiveRichness,
+  snapshotLabel,
   type ArchiveFetchResult,
 } from "./archiveClient.js";
 export {

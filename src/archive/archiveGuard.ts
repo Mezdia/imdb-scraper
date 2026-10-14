@@ -18,6 +18,16 @@ export class NonArchivedImdbUrlError extends Error {
 
 const TIMESTAMP_RE = /^(\d{1,14})(id_)?$/i;
 
+/** Wayback snapshots are only valid for IMDb title/entity pages (www/m). */
+function isAllowedArchiveEmbedded(url: string): boolean {
+  try {
+    const h = new URL(url).hostname.toLowerCase();
+    return h === "imdb.com" || h === "www.imdb.com" || h === "m.imdb.com";
+  } catch {
+    return false;
+  }
+}
+
 function embeddedFromPath(pathname: string): { timestamp: string; idSuffix: boolean; embedded: string } | null {
   // pathname: /web/<timestamp>[id_]/<embedded-url>
   const m = pathname.match(/^\/web\/([^/]+)\/(.+)$/i);
@@ -47,8 +57,9 @@ export function isArchiveUrl(url: string): boolean {
   // Wayback strips the scheme slash sometimes; restore minimal scheme check.
   if (!/^https?:\/\//i.test(embedded)) return false;
   try {
-    // Embedded must itself be IMDb-only (www/m + imdb.com).
-    return isImdbOnlyUrl(embedded);
+    // Embedded must itself be IMDb-only (www/m + imdb.com) AND restricted
+    // to title/entity hosts — datasets/suggestion/CDN via archive are forbidden.
+    return isImdbOnlyUrl(embedded) && isAllowedArchiveEmbedded(embedded);
   } catch {
     return false;
   }
@@ -72,7 +83,7 @@ export function buildArchiveUrl(imdbUrl: string, timestamp: string = "latest"): 
   if (!/^\d{1,14}$/.test(normalizedTimestamp)) {
     throw new NonArchivedImdbUrlError(`${ARCHIVE_ORIGIN}/web/${timestamp}/${imdbUrl}`);
   }
-  if (!isImdbOnlyUrl(imdbUrl)) throw new NonArchivedImdbUrlError(`${ARCHIVE_ORIGIN}/web/${normalizedTimestamp}id_/${imdbUrl}`);
+  if (!isImdbOnlyUrl(imdbUrl) || !isAllowedArchiveEmbedded(imdbUrl)) throw new NonArchivedImdbUrlError(`${ARCHIVE_ORIGIN}/web/${normalizedTimestamp}id_/${imdbUrl}`);
   return assertArchiveUrl(`${ARCHIVE_ORIGIN}/web/${normalizedTimestamp}id_/${imdbUrl}`);
 }
 
@@ -83,7 +94,7 @@ export function extractEmbeddedImdbUrl(archiveUrl: string): string | null {
     if (u.hostname.toLowerCase() !== ARCHIVE_HOST) return null;
     const parts = embeddedFromPath(u.pathname);
     if (!parts) return null;
-    return isImdbOnlyUrl(parts.embedded) ? parts.embedded : null;
+    return isImdbOnlyUrl(parts.embedded) && isAllowedArchiveEmbedded(parts.embedded) ? parts.embedded : null;
   } catch {
     return null;
   }
@@ -110,7 +121,7 @@ export function extractArchiveTimestamp(archiveUrl: string): string | null {
 
 /** Build a CDX query URL for the exact IMDb URL (latest-snapshot lookup). */
 export function buildArchiveCdxUrl(imdbUrl: string, limit = 5): string {
-  if (!isImdbOnlyUrl(imdbUrl)) {
+  if (!isImdbOnlyUrl(imdbUrl) || !isAllowedArchiveEmbedded(imdbUrl)) {
     throw new NonArchivedImdbUrlError(`${ARCHIVE_ORIGIN}/cdx/search/cdx?url=${imdbUrl}`);
   }
   const n = Math.max(1, Math.min(50, Math.floor(limit) || 5));
@@ -138,7 +149,7 @@ export function isArchiveCdxUrl(url: string): boolean {
   const target = u.searchParams.get("url");
   if (!target) return false;
   try {
-    return isImdbOnlyUrl(target);
+    return isImdbOnlyUrl(target) && isAllowedArchiveEmbedded(target);
   } catch {
     return false;
   }

@@ -79,6 +79,12 @@ via its Wayback snapshot:
   `--archive-timestamp latest|YYYYMMDDHHMMSS` (default `latest` = auto-resolved
   newest available snapshot via Wayback CDX lookup for that exact IMDb URL,
   with `2id_` redirect as fallback).
+- Robust by verification (live web.archive.org probes, Oct 2026): `latest`
+  walks recent CDX captures newest-first (up to 3 snapshot fetches) and keeps
+  the richest — the newest capture is often an AWS WAF interstitial while an
+  older one is rich. CDX 503s are retried with backoff; IMDb 404 pages,
+  challenge pages and site-chrome JSON-LD are rejected so they can never
+  poison the merged record; gallery dedupes by canonical image id.
 - Isolated by design: all code lives in `src/archive/` (`archiveGuard.ts`,
   `archiveClient.ts`, `archiveTypes.ts`) with its own `assertArchiveUrl()`
   guard. `web.archive.org` is never added to the IMDb allow-list, and

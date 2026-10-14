@@ -40,6 +40,12 @@ describe("archive guard (BETA)", () => {
       "https://web.archive.org/web/20240101120000js_/https://www.imdb.com/title/tt0111161/",
       "https://web.archive.org/web/liveweb/https://www.imdb.com/title/tt0111161/",
       "https://web.archive.org/web/2im_/https://www.imdb.com/title/tt0111161/",
+      // IMDb-owned but NOT title pages: archive is title-only, never
+      // datasets/suggestion/CDN (live-verified Oct 2026).
+      "https://web.archive.org/web/20240101120000id_/https://datasets.imdbws.com/title.basics.tsv.gz",
+      "https://web.archive.org/web/20240101120000id_/https://v3.sg.media-imdb.com/suggestion/s/shawshank.json",
+      "https://web.archive.org/web/20240101120000id_/https://m.media-amazon.com/images/M/MV5B_test.jpg",
+      "https://web.archive.org/web/20240101120000id_/https://developer.imdb.com/non-commercial-datasets/",
       "not-a-url",
     ]) {
       expect(isArchiveUrl(u)).toBe(false);
@@ -54,12 +60,24 @@ describe("archive guard (BETA)", () => {
     expect(buildArchiveUrl("https://www.imdb.com/title/tt0111161/", "latest")).toBe(
       "https://web.archive.org/web/2id_/https://www.imdb.com/title/tt0111161/",
     );
+    expect(buildArchiveUrl("https://m.imdb.com/title/tt0111161/reference/", "20240101")).toContain(
+      "m.imdb.com",
+    );
     expect(() => buildArchiveUrl("https://example.com/x", "20240101")).toThrow(
       NonArchivedImdbUrlError,
     );
     expect(() => buildArchiveUrl("https://www.imdb.com/title/tt0111161/", "bogus")).toThrow(
       NonArchivedImdbUrlError,
     );
+    // Title-only: datasets/suggestion/CDN must never build snapshot URLs.
+    for (const bad of [
+      "https://datasets.imdbws.com/title.basics.tsv.gz",
+      "https://v3.sg.media-imdb.com/suggestion/s/shawshank.json",
+      "https://m.media-amazon.com/images/M/MV5B_test.jpg",
+    ]) {
+      expect(() => buildArchiveUrl(bad, "20240101")).toThrow(NonArchivedImdbUrlError);
+      expect(() => buildArchiveCdxUrl(bad)).toThrow(NonArchivedImdbUrlError);
+    }
   });
 
   it("extracts embedded URL + timestamp", () => {
