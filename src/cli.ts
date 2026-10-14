@@ -51,7 +51,7 @@ program
   .option("--resume", "skip titles already scraped (default true)", true)
   .option("--datasets", "pre-download official IMDb datasets for bulk enrichment")
   .option("--archive-beta", "enable archived-IMDb fallback via web.archive.org (BETA, last-resort only)")
-  .option("--no-archive-beta", "disable archived-IMDb fallback (default)")
+  .option("--no-archive-beta", "disable archived-IMDb fallback (default) (BETA)")
   .option(
     "--archive-timestamp <ts>",
     "wayback snapshot with --archive-beta: latest (auto-find newest via CDX) or YYYYMMDDHHMMSS (BETA)",

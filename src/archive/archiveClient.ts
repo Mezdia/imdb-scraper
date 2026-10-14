@@ -569,8 +569,12 @@ export function expandArchiveCandidates(urls: string[]): string[] {
     seen.add(u);
     out.push(u);
   };
-  for (const u of urls) push(u);
   for (const u of urls) {
+    push(u);
+    // Interleaved mirror: the m-mirror of a title is live-verified rich
+    // while reference/ snapshots replay empty, so each original is
+    // immediately followed by its mirror instead of trying all originals
+    // first (still bounded to 4 total).
     try {
       const parsed = new URL(u);
       const host = parsed.hostname.toLowerCase();
